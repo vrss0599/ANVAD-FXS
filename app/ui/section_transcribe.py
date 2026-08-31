@@ -62,11 +62,12 @@ class SectionTranscribe(ctk.CTkFrame):
         self.cancel_btn.pack(side="left", fill="x", expand=True)
         self.cancel_btn.pack_forget()  # Hidden initially
 
-        # Status label
+        # Status label (above progress bar)
         self.status_label = ctk.CTkLabel(
-            self, text="Ready — select a file and click Start",
-            font=ctk.CTkFont(family=FONTS["body"][0], size=FONTS["body"][1]),
+            self, text="Ready — select an audio/video file and click Start",
+            font=ctk.CTkFont(family=FONTS["subheading"][0], size=FONTS["subheading"][1], weight=FONTS["subheading"][2]),
             text_color=COLORS["text_dim"],
+            anchor="w",
         )
         self.status_label.pack(fill="x", padx=PAD["card_inner"], pady=(0, PAD["small"]))
 
@@ -196,7 +197,7 @@ class SectionTranscribe(ctk.CTkFrame):
         needs_extraction = audio_info.get("needs_extraction", False)
         if needs_extraction:
             self._pipeline_step = 1
-            self.status_label.configure(text="Extracting audio from video...", text_color=COLORS["accent"])
+            self.status_label.configure(text="Step 1/3: Extracting 16kHz audio from media...", text_color=COLORS["accent"])
             self._log("Pipeline: extract audio → transcribe → verify SRT")
 
             exports_dir = Path(file_path).parent
@@ -214,7 +215,7 @@ class SectionTranscribe(ctk.CTkFrame):
         else:
             self._pipeline_step = 2
             self._wav_path = file_path
-            self.status_label.configure(text="Loading model...", text_color=COLORS["accent"])
+            self.status_label.configure(text="Step 1/2: Preparing transcription...", text_color=COLORS["accent"])
             self._log("Pipeline: transcribe → verify SRT")
             self._start_transcribe(file_path, settings)
 
@@ -223,10 +224,11 @@ class SectionTranscribe(ctk.CTkFrame):
 
     def _start_transcribe(self, audio_path: str, settings: dict):
         self._pipeline_step = 2
-        self.status_label.configure(text=f"Transcribing with {settings.get('model', 'large-v3')}...", text_color=COLORS["accent"])
+        model_name = settings.get("model", "large-v3")
+        self.status_label.configure(text=f"Step 2: Checking {model_name} model...", text_color=COLORS["accent"])
         self._runner.run_transcribe(
             input_path=audio_path,
-            model=settings.get("model", "large-v3"),
+            model=model_name,
             task=settings.get("task", "translate"),
             msg_queue=self._msg_queue,
             language=settings.get("language"),
@@ -236,7 +238,7 @@ class SectionTranscribe(ctk.CTkFrame):
 
     def _start_verify(self, srt_path: str):
         self._pipeline_step = 3
-        self.status_label.configure(text="Verifying SRT...", text_color=COLORS["accent"])
+        self.status_label.configure(text="Final Step: Verifying & formatting SRT subtitles...", text_color=COLORS["accent"])
         self._runner.run_verify(srt_path, self._msg_queue, fix=True)
 
     def _poll(self):
@@ -254,11 +256,26 @@ class SectionTranscribe(ctk.CTkFrame):
                     self._log(text)
 
                     # Parse progress clues from transcribe.py output
-                    if text.startswith("[model] loaded"):
+                    if text.startswith("[download]"):
+                        self.status_label.configure(
+                            text="Step 2: Downloading AI model weights (~2.9 GB, 1st run only)...",
+                            text_color=COLORS["warning"],
+                        )
+
+                    elif text.startswith("[model] loading") or text.startswith("[model] Model"):
+                        self.status_label.configure(
+                            text="Step 2: Initializing AI model on GPU/CPU...",
+                            text_color=COLORS["accent"],
+                        )
+
+                    elif text.startswith("[model] loaded"):
                         self.progress.stop()
                         self.progress.configure(mode="determinate")
                         self.progress.set(0.05)
-                        self.status_label.configure(text="Model loaded — transcribing...")
+                        self.status_label.configure(
+                            text="Step 2: Model ready — starting transcription...",
+                            text_color=COLORS["success"],
+                        )
 
                     elif text.startswith("[") and "->" in text and "logprob=" in text:
                         # Segment line — estimate progress from timestamps
@@ -271,7 +288,7 @@ class SectionTranscribe(ctk.CTkFrame):
                                 pct = min(0.95, end_ts / total_dur)
                                 self.progress.set(pct)
                                 self.status_label.configure(
-                                    text=f"Transcribing... {int(pct*100)}%",
+                                    text=f"Step 2: Transcribing speech... {int(pct*100)}%",
                                     text_color=COLORS["accent"],
                                 )
                         except (ValueError, IndexError):
@@ -369,7 +386,7 @@ class SectionTranscribe(ctk.CTkFrame):
         self.elapsed_label.configure(text=f"Total: {mins}:{secs:02d}")
 
         self.status_label.configure(
-            text=f"{ICONS['check']} Complete — SRT ready!",
+            text=f"{ICONS['check']} Complete — Subtitles ready for DaVinci Resolve!",
             text_color=COLORS["success"],
         )
         self.cancel_btn.pack_forget()
@@ -389,7 +406,7 @@ class SectionTranscribe(ctk.CTkFrame):
             pass
         self.progress.set(0)
 
-        self.status_label.configure(text="Failed", text_color=COLORS["error"])
+        self.status_label.configure(text=f"{ICONS['cross']} Transcription failed — check error & fix below", text_color=COLORS["error"])
         self.cancel_btn.pack_forget()
         self.start_btn.configure(text=f"{ICONS['play']}  Start Transcription")
         self.start_btn.pack(side="left", fill="x", expand=True)
@@ -437,7 +454,7 @@ class SectionTranscribe(ctk.CTkFrame):
         except Exception:
             pass
         self.progress.set(0)
-        self.status_label.configure(text="Cancelled", text_color=COLORS["warning"])
+        self.status_label.configure(text=f"{ICONS['stop']} Cancelled by user", text_color=COLORS["warning"])
         self.cancel_btn.pack_forget()
         self.start_btn.configure(text=f"{ICONS['play']}  Start Transcription")
         self.start_btn.pack(side="left", fill="x", expand=True)

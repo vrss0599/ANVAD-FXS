@@ -22,6 +22,9 @@ if sys.platform == "win32":
     except Exception:
         pass
 
+# Suppress harmless HF Hub Windows symlink warning
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -91,8 +94,35 @@ def resolve_compute_type(model: str, device: str, requested: str) -> str:
         return DEFAULT_COMPUTE_TURBO
     return DEFAULT_COMPUTE_LARGE
 
+def is_model_cached(model_name: str) -> bool:
+    """Check if model weights are already downloaded in local HuggingFace cache."""
+    try:
+        cache_hub = Path.home() / ".cache" / "huggingface" / "hub"
+        if not cache_hub.exists():
+            return False
+        clean_name = model_name.lower().replace("-", "").replace("_", "")
+        for d in cache_hub.iterdir():
+            if d.is_dir() and "whisper" in d.name.lower():
+                d_clean = d.name.lower().replace("-", "").replace("_", "")
+                if clean_name in d_clean:
+                    snapshots = d / "snapshots"
+                    if snapshots.is_dir() and any(snapshots.iterdir()):
+                        return True
+        return False
+    except Exception:
+        return False
+
 def load_model_with_fallback(model_name: str, device: str, compute_type: str):
     from faster_whisper import WhisperModel
+    
+    cached = is_model_cached(model_name)
+    if not cached:
+        print(f"[download] Model '{model_name}' not found in local cache.")
+        print(f"[download] Downloading '{model_name}' weights from Hugging Face (first-time only, ~2.9GB for large-v3)...")
+        print(f"[download] Please wait — model will be cached permanently on disk for instant future loads.")
+    else:
+        print(f"[model] Model '{model_name}' found in local cache.")
+
     attempts = []
     if compute_type == "int8_float16":
         attempts = [compute_type, "int8", "float16"]
@@ -118,7 +148,7 @@ def load_model_with_fallback(model_name: str, device: str, compute_type: str):
             t0 = time.time()
             model = WhisperModel(model_name, device=device, compute_type=ct)
             dt = time.time() - t0
-            print(f"[model] loaded in {dt:.1f}s")
+            print(f"[model] loaded '{model_name}' ({device}/{ct}) in {dt:.1f}s")
             try:
                 import torch
                 if device == "cuda" and torch.cuda.is_available():
