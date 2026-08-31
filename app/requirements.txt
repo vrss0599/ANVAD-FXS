@@ -1,0 +1,7 @@
+# UGA-SUB Desktop App
+# Install: pip install -r app/requirements.txt
+# Note: transcribe/ dependencies (faster-whisper, torch, etc.) are separate
+#       Install those via: pip install -r transcribe/requirements.txt
+
+customtkinter>=5.2.0
+pillow>=10.0.0
