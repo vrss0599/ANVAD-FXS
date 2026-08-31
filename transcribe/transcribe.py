@@ -14,6 +14,14 @@ import time
 import gc
 from pathlib import Path
 
+# Safe Windows console encoding for Unicode/multilingual text (Kannada/Hindi/English)
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

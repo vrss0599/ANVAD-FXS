@@ -16,6 +16,14 @@ import re
 import sys
 from pathlib import Path
 
+# Safe Windows console encoding for Unicode/multilingual text
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 TIMESTAMP_RE = re.compile(
     r"^(\d{2}):(\d{2}):(\d{2}),(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2}),(\d{3})\s*$"
 )
