@@ -30,13 +30,50 @@ class ScriptRunner:
         cmd = [self._get_python(), str(script), "--input", input_path, "--out", output_path, "--overwrite"]
         self._run_cmd(cmd, msg_queue, root)
     
-    def run_transcribe(self, input_path: str, model: str, task: str, msg_queue: queue.Queue, language: str = None, beam_size: int = 1, device: str = "auto"):
-        """Run transcribe.py in background thread."""
+    def run_transcribe(self, input_path: str, model: str, task: str, msg_queue: queue.Queue, language: str = None, beam_size: int = 5, device: str = "auto",
+                       vad_filter: bool = False, high_recall: bool = False, no_speech_threshold: float = None,
+                       log_prob_threshold: float = None, compression_ratio_threshold: float = None,
+                       vad_threshold: float = 0.35, vad_min_silence_ms: int = 1000, vad_speech_pad_ms: int = 400,
+                       word_timestamps: bool = True, condition_on_previous_text: bool = None,
+                       temperature: str = "0.0,0.2,0.4,0.6,0.8"):
+        """Run transcribe.py in background thread. Forwards ALL High-Recall settings — fixes prior wiring bug."""
         root = self._get_project_root()
         script = root / "transcribe" / "transcribe.py"
-        cmd = [self._get_python(), str(script), "--input", input_path, "--model", model, "--task", task, "--beam_size", str(beam_size), "--device", device, "--exports_dir", str(root / "exports")]
+        cmd = [self._get_python(), str(script), "--input", input_path, "--model", model, "--task", task,
+               "--beam_size", str(beam_size), "--device", device, "--exports_dir", str(root / "exports")]
         if language:
             cmd.extend(["--language", language])
+        # High-Recall shortcut — overrides everything
+        if high_recall:
+            cmd.append("--high_recall")
+        else:
+            # Explicit thresholds so CLI defaults don't silently win when user toggled preset
+            if no_speech_threshold is not None:
+                cmd.extend(["--no_speech_threshold", str(no_speech_threshold)])
+            if log_prob_threshold is not None:
+                cmd.extend(["--log_prob_threshold", str(log_prob_threshold)])
+            if compression_ratio_threshold is not None:
+                cmd.extend(["--compression_ratio_threshold", str(compression_ratio_threshold)])
+            # VAD
+            if vad_filter:
+                cmd.append("--vad_filter")
+                cmd.extend(["--vad_threshold", str(vad_threshold)])
+                cmd.extend(["--vad_min_silence_ms", str(vad_min_silence_ms)])
+                cmd.extend(["--vad_speech_pad_ms", str(vad_speech_pad_ms)])
+            else:
+                cmd.append("--no-vad_filter")
+            # Condition (per-task auto if None, explicit if bool)
+            if condition_on_previous_text is True:
+                cmd.append("--condition_on_previous_text")
+            elif condition_on_previous_text is False:
+                cmd.append("--no-condition_on_previous_text")
+            # Word timestamps
+            if word_timestamps:
+                cmd.append("--word_timestamps")
+            else:
+                cmd.append("--no-word_timestamps")
+            if temperature:
+                cmd.extend(["--temperature", str(temperature)])
         self._run_cmd(cmd, msg_queue, root)
     
     def run_verify(self, srt_path: str, msg_queue: queue.Queue, fix: bool = True):

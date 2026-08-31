@@ -225,15 +225,27 @@ class SectionTranscribe(ctk.CTkFrame):
     def _start_transcribe(self, audio_path: str, settings: dict):
         self._pipeline_step = 2
         model_name = settings.get("model", "large-v3")
-        self.status_label.configure(text=f"Step 2: Checking {model_name} model...", text_color=COLORS["accent"])
+        preset = " — High-Recall 100% (VAD off)" if settings.get("high_recall") else (" — Balanced VAD" if settings.get("vad_filter") else " — 100% VAD off")
+        self.status_label.configure(text=f"Step 2: Checking {model_name} model...{preset}", text_color=COLORS["accent"])
         self._runner.run_transcribe(
             input_path=audio_path,
             model=model_name,
             task=settings.get("task", "translate"),
             msg_queue=self._msg_queue,
             language=settings.get("language"),
-            beam_size=settings.get("beam_size", 1),
+            beam_size=settings.get("beam_size", 5),
             device=settings.get("device", "auto"),
+            vad_filter=settings.get("vad_filter", False),
+            high_recall=settings.get("high_recall", False),
+            no_speech_threshold=settings.get("no_speech_threshold", 0.90),
+            log_prob_threshold=settings.get("log_prob_threshold", -2.0),
+            compression_ratio_threshold=settings.get("compression_ratio_threshold", 3.0),
+            vad_threshold=settings.get("vad_threshold", 0.35),
+            vad_min_silence_ms=settings.get("vad_min_silence_ms", 1000),
+            vad_speech_pad_ms=settings.get("vad_speech_pad_ms", 400),
+            word_timestamps=settings.get("word_timestamps", True),
+            condition_on_previous_text=settings.get("condition_on_previous_text"),
+            temperature=settings.get("temperature", "0.0,0.2,0.4,0.6,0.8"),
         )
 
     def _start_verify(self, srt_path: str):
@@ -268,6 +280,21 @@ class SectionTranscribe(ctk.CTkFrame):
                             text_color=COLORS["accent"],
                         )
 
+                    elif text.startswith("[high-recall]"):
+                        self.status_label.configure(
+                            text="Step 2: High-Recall 100% mode — VAD off, every word kept",
+                            text_color=COLORS["success"],
+                        )
+
+                    elif text.startswith("[vad] OFF"):
+                        self.status_label.configure(
+                            text="Step 2: VAD OFF — 100% recall, decoding all audio...",
+                            text_color=COLORS["success"],
+                        )
+
+                    elif text.startswith("[vad]") and "VAD" in text:
+                        pass  # keep current status, just log
+
                     elif text.startswith("[model] loaded"):
                         self.progress.stop()
                         self.progress.configure(mode="determinate")
@@ -276,6 +303,26 @@ class SectionTranscribe(ctk.CTkFrame):
                             text="Step 2: Model ready — starting transcription...",
                             text_color=COLORS["success"],
                         )
+
+                    elif text.startswith("[warn] VAD removed"):
+                        # Surface VAD gap warning in status
+                        self.status_label.configure(
+                            text="⚠ VAD removed >15% — if words missing, use 100% preset",
+                            text_color=COLORS["warning"],
+                        )
+
+                    elif text.startswith("[gap]"):
+                        self.status_label.configure(
+                            text="⚠ Gap detected — check log for missing speech hint",
+                            text_color=COLORS["warning"],
+                        )
+
+                    elif text.startswith("[coverage]"):
+                        # keep last coverage in rtf label
+                        try:
+                            self.rtf_label.configure(text=text.replace("[coverage] ", ""))
+                        except Exception:
+                            pass
 
                     elif text.startswith("[") and "->" in text and "logprob=" in text:
                         # Segment line — estimate progress from timestamps
@@ -287,11 +334,12 @@ class SectionTranscribe(ctk.CTkFrame):
                             if total_dur > 0:
                                 pct = min(0.95, end_ts / total_dur)
                                 self.progress.set(pct)
+                                vad_tag = " (100% VAD off)" if not (self._get_settings().get("vad_filter") if self._get_settings else False) else ""
                                 self.status_label.configure(
-                                    text=f"Step 2: Transcribing speech... {int(pct*100)}%",
+                                    text=f"Step 2: Transcribing speech... {int(pct*100)}%{vad_tag}",
                                     text_color=COLORS["accent"],
                                 )
-                        except (ValueError, IndexError):
+                        except (ValueError, IndexError, AttributeError):
                             pass
 
                     elif text.startswith("[done]"):

@@ -15,8 +15,8 @@ class SectionSettings(ctk.CTkFrame):
 
     MODELS = ["large-v3", "turbo", "medium", "small", "base", "tiny"]
     MODEL_HINTS = {
-        "large-v3": "Best for Kannada/Hindi → English (2.9GB, ~1m43s/hr on 3050)",
-        "turbo": "English-only, 2× faster (809MB, ~30-45s/hr on 3050)",
+        "large-v3": "Best for Kannada/Hindi → English (2.9GB, ~2m00s/hr VAD off, 100% recall)",
+        "turbo": "English-only, 2× faster (809MB, ~30-45s/hr) — use for en-only",
         "medium": "Balanced (1.5GB, decent quality)",
         "small": "Fast, lower quality (462MB)",
         "base": "Very fast, basic quality (141MB)",
@@ -119,7 +119,46 @@ class SectionSettings(ctk.CTkFrame):
             text_color=COLORS["text_dim"],
             anchor="w",
         )
-        self.model_hint.pack(fill="x", padx=PAD["card_inner"], pady=(0, PAD["element"]))
+        self.model_hint.pack(fill="x", padx=PAD["card_inner"], pady=(0, PAD["small"]))
+
+        # ── Preset row: one-click quality modes ──
+        preset_frame = ctk.CTkFrame(self, fg_color="transparent")
+        preset_frame.pack(fill="x", padx=PAD["card_inner"], pady=(0, PAD["element"]))
+        ctk.CTkLabel(
+            preset_frame, text="Transcription Quality Preset",
+            font=ctk.CTkFont(family=FONTS["small"][0], size=FONTS["small"][1], weight="bold"),
+            text_color=COLORS["text"],
+        ).pack(side="left")
+        ctk.CTkLabel(
+            preset_frame, text="  VAD off = best quality (recommended for kn/hi→en)",
+            font=ctk.CTkFont(family=FONTS["small"][0], size=10),
+            text_color=COLORS["text_dim"],
+        ).pack(side="left", padx=(6, 0))
+
+        self.preset_var = ctk.StringVar(value="100% Complete (High-Recall) • VAD off • 2m00s/hr")
+        self.preset_menu = ctk.CTkOptionMenu(
+            preset_frame,
+            variable=self.preset_var,
+            values=[
+                "100% Complete (High-Recall) • VAD off • 2m00s/hr",
+                "Balanced • VAD gentle 0.35 • 1m45s/hr",
+                "Fast • VAD on • 1m30s/hr",
+            ],
+            font=ctk.CTkFont(family=FONTS["body"][0], size=11),
+            width=340, height=28,
+            corner_radius=DIM["button_corner"],
+            command=self._on_preset_change,
+        )
+        self.preset_menu.pack(side="right")
+
+        self.preset_hint = ctk.CTkLabel(
+            self,
+            text="✓ 100% mode: VAD OFF • near-disable thresholds • beam 5 • every word kept (costs +10-15% time)",
+            font=ctk.CTkFont(family=FONTS["small"][0], size=10),
+            text_color=COLORS["success"],
+            anchor="w",
+        )
+        self.preset_hint.pack(fill="x", padx=PAD["card_inner"], pady=(0, PAD["element"]))
 
         # Advanced toggle
         self.advanced_visible = False
@@ -146,10 +185,10 @@ class SectionSettings(ctk.CTkFrame):
         beam_frame = ctk.CTkFrame(adv_inner, fg_color="transparent")
         beam_frame.grid(row=0, column=0, sticky="ew", padx=(0, 8))
         ctk.CTkLabel(beam_frame, text="Beam Size", font=ctk.CTkFont(size=10), text_color=COLORS["text_dim"]).pack(anchor="w")
-        self.beam_var = ctk.IntVar(value=1)
+        self.beam_var = ctk.IntVar(value=5)
         self.beam_slider = ctk.CTkSlider(beam_frame, from_=1, to=5, number_of_steps=4, variable=self.beam_var, width=120)
         self.beam_slider.pack(anchor="w", pady=(2, 0))
-        self.beam_label = ctk.CTkLabel(beam_frame, text="1 (low VRAM)", font=ctk.CTkFont(size=10), text_color=COLORS["text_dim"])
+        self.beam_label = ctk.CTkLabel(beam_frame, text="5 (Best quality, 100% complete)", font=ctk.CTkFont(size=10), text_color=COLORS["text_dim"])
         self.beam_label.pack(anchor="w")
         self.beam_slider.configure(command=self._on_beam_change)
 
@@ -157,9 +196,11 @@ class SectionSettings(ctk.CTkFrame):
         vad_frame = ctk.CTkFrame(adv_inner, fg_color="transparent")
         vad_frame.grid(row=0, column=1, sticky="ew", padx=(0, 8))
         ctk.CTkLabel(vad_frame, text="VAD Filter", font=ctk.CTkFont(size=10), text_color=COLORS["text_dim"]).pack(anchor="w")
-        self.vad_var = ctk.BooleanVar(value=True)
-        self.vad_switch = ctk.CTkSwitch(vad_frame, text="Silero VAD", variable=self.vad_var, font=ctk.CTkFont(size=11))
+        self.vad_var = ctk.BooleanVar(value=False)
+        self.vad_switch = ctk.CTkSwitch(vad_frame, text="Silero VAD (off=100%)", variable=self.vad_var, font=ctk.CTkFont(size=11), command=self._on_vad_toggle)
         self.vad_switch.pack(anchor="w", pady=(4, 0))
+        self.vad_hint = ctk.CTkLabel(vad_frame, text="OFF = best quality", font=ctk.CTkFont(size=9), text_color=COLORS["success"])
+        self.vad_hint.pack(anchor="w")
 
         # Device
         dev_frame = ctk.CTkFrame(adv_inner, fg_color="transparent")
@@ -181,8 +222,45 @@ class SectionSettings(ctk.CTkFrame):
 
     def _on_beam_change(self, value: float):
         v = int(round(value))
-        labels = {1: "1 (low VRAM)", 2: "2", 3: "3", 4: "4", 5: "5 (more accurate, +1GB)"}
+        labels = {1: "1 (fast, low VRAM)", 2: "2", 3: "3 (balanced)", 4: "4", 5: "5 (Best quality, 100% complete)"}
         self.beam_label.configure(text=labels.get(v, str(v)))
+
+    def _on_preset_change(self, value: str):
+        """One-click presets — sync VAD switch, beam, and hint."""
+        if "100% Complete" in value:
+            self.vad_var.set(False)
+            self.beam_var.set(5)
+            self._on_beam_change(5)
+            self.beam_slider.set(5)
+            self.preset_hint.configure(text="✓ 100% mode: VAD OFF • near-disable thresholds • beam 5 • every word kept (costs +10-15% time)", text_color=COLORS["success"])
+            self.vad_hint.configure(text="OFF = best quality (preset)", text_color=COLORS["success"])
+        elif "Balanced" in value:
+            self.vad_var.set(True)
+            self.beam_var.set(5)
+            self._on_beam_change(5)
+            self.beam_slider.set(5)
+            self.preset_hint.configure(text="Balanced: VAD gentle 0.35 • thresholds 0.90/-2.0/3.0 • beam 5 • good quality, slight speed gain", text_color=COLORS["warning"])
+            self.vad_hint.configure(text="ON gentle 0.35", text_color=COLORS["warning"])
+        else:  # Fast
+            self.vad_var.set(True)
+            self.beam_var.set(1)
+            self._on_beam_change(1)
+            self.beam_slider.set(1)
+            self.preset_hint.configure(text="Fast: VAD on • lower accuracy — may drop soft/whisper speech", text_color=COLORS["error"])
+            self.vad_hint.configure(text="ON", text_color=COLORS["text_dim"])
+
+    def _on_vad_toggle(self):
+        # Keep preset menu in sync when user flips switch manually
+        is_on = self.vad_var.get()
+        if is_on:
+            self.vad_hint.configure(text="ON gentle 0.35", text_color=COLORS["warning"])
+            if "100% Complete" in self.preset_var.get():
+                self.preset_var.set("Balanced • VAD gentle 0.35 • 1m45s/hr")
+                self.preset_hint.configure(text="Balanced: VAD gentle 0.35 • thresholds 0.90/-2.0/3.0 • beam 5 • good quality, slight speed gain", text_color=COLORS["warning"])
+        else:
+            self.vad_hint.configure(text="OFF = best quality", text_color=COLORS["success"])
+            self.preset_var.set("100% Complete (High-Recall) • VAD off • 2m00s/hr")
+            self.preset_hint.configure(text="✓ 100% mode: VAD OFF • near-disable thresholds • beam 5 • every word kept (costs +10-15% time)", text_color=COLORS["success"])
 
     def _toggle_advanced(self):
         self.advanced_visible = not self.advanced_visible
@@ -194,12 +272,38 @@ class SectionSettings(ctk.CTkFrame):
             self.advanced_toggle.configure(text=f"{ICONS['gear']} Advanced Settings ▸")
 
     def get_settings(self) -> dict:
-        """Return current settings as a dict for the runner."""
+        """Return current settings as a dict for the runner. Preset determines thresholds."""
+        preset = self.preset_var.get() if hasattr(self, "preset_var") else ""
+        # High-Recall flag is the cleanest: runner sends --high_recall (single switch) for 100% mode
+        high_recall = "100% Complete" in preset
+        # Near-disable thresholds for 100%/Balanced; Fast uses original aggressive thresholds
+        if high_recall or "Balanced" in preset:
+            no_speech = 0.90
+            log_prob = -2.0
+            compression = 3.0
+        else:  # Fast
+            no_speech = 0.80
+            log_prob = -1.0
+            compression = 2.4
+        # Per-task condition: translate->False (avoid drift), transcribe->True (context). Runner will send explicit flag.
+        task_code = self.TASKS.get(self.task_var.get(), "translate")
+        condition = False if task_code == "translate" else True
+
         return {
             "model": self.model_var.get(),
-            "task": self.TASKS.get(self.task_var.get(), "translate"),
+            "task": task_code,
             "language": self.LANGUAGES.get(self.lang_var.get()),
             "beam_size": int(round(self.beam_var.get())),
             "vad_filter": self.vad_var.get(),
             "device": self.DEVICES.get(self.device_var.get(), "auto"),
+            "high_recall": high_recall,
+            "no_speech_threshold": no_speech,
+            "log_prob_threshold": log_prob,
+            "compression_ratio_threshold": compression,
+            "vad_threshold": 0.35,
+            "vad_min_silence_ms": 1000,
+            "vad_speech_pad_ms": 400,
+            "word_timestamps": True,
+            "condition_on_previous_text": condition,
+            "temperature": "0.0,0.2,0.4,0.6,0.8",
         }

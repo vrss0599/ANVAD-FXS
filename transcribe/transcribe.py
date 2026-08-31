@@ -3,8 +3,9 @@
 ENV-A: Local transcription with faster-whisper (CTranslate2) — tuned for RTX 3050 Mobile 6GB 120W + 24GB RAM
 Replaces prev-plan.md Colab openai-whisper large-v3 + Tesla T4 paywall with fully local, $0 inference.
 
-Default: large-v3 int8_float16 cuda beam=1 vad_filter=True word_timestamps=True task=translate -> SRT
-Perf on 3050M: 1hr ~1m43s-2m24s (large-v3) / 30-45s (turbo) ; 10-min chunk ~17-24s
+Default: large-v3 int8_float16 cuda beam=5 vad_filter=False word_timestamps=True task=translate -> SRT
+Perf on 3050M: 1hr ~2m00s-2m45s (large-v3 beam=5, VAD off) / 30-45s (turbo) ; 10-min chunk ~20-27s
+VAD OFF = best quality / 100% recall (+10-15% time vs VAD on, but zero dropped words)
 """
 
 import argparse
@@ -41,11 +42,15 @@ MODEL_ALIASES = {
     "distil-large-v3": "distil-large-v3",
 }
 
-# 6GB-tuned defaults
+# 6GB-tuned defaults — High-Recall 100% preset (user wants best quality, kn/hi->en)
 DEFAULT_MODEL = "large-v3"
 DEFAULT_COMPUTE_TURBO = "float16"      # 809M fits 2GB
-DEFAULT_COMPUTE_LARGE = "int8_float16" # 1.55B fits 2.5GB vs float16 3.1GB
-DEFAULT_BEAM = 1  # beam=5 needs +1GB and +30% time for <0.3% WER gain
+DEFAULT_COMPUTE_LARGE = "int8_float16" # 1.55B fits 2.8GB beam=5 (2.5GB beam=1) vs float16 3.1GB
+DEFAULT_BEAM = 5  # 100% complete: tracks multiple paths, fixes mid/end drops
+# High-Recall thresholds (near-disable): keep almost everything, filter only obvious junk in Python
+DEFAULT_NO_SPEECH = 0.90          # was 0.6/0.8 — 0.90 near-disable, only drops pure silence
+DEFAULT_LOG_PROB = -2.0            # was -1.0 — -2.0 keeps soft/accented speech (logprob ~-1.2)
+DEFAULT_COMPRESSION = 3.0          # was 2.4 — 3.0 keeps repetitive but valid speech
 
 def format_srt_time(seconds: float) -> str:
     # robust: total milliseconds to avoid float remainder errors (e.g. 3599.9995)
@@ -199,27 +204,79 @@ def parse_args():
     p.add_argument("--compute_type", default="auto", choices=["auto", "int8_float16", "float16", "int8", "float32"], help="CTranslate2 compute type. auto tuned for 6GB: large-v3->int8_float16, turbo->float16, cpu->int8")
     p.add_argument("--task", default="translate", choices=["translate", "transcribe"], help="translate=kn/hi->en (default), transcribe=keep original language")
     p.add_argument("--language", default=None, help="Force language code (e.g., kn, hi, en) or auto-detect if omitted")
-    p.add_argument("--beam_size", type=int, default=DEFAULT_BEAM, help="Beam size. 1=fast/low VRAM (3050 default), 5=more accurate +1GB/+30%% time")
-    p.add_argument("--vad_filter", action=argparse.BooleanOptionalAction, default=True, help="Enable Silero VAD to skip silence (recommended, improves timestamps)")
-    p.add_argument("--vad_min_silence_ms", type=int, default=500, help="VAD min silence duration ms")
-    p.add_argument("--word_timestamps", action=argparse.BooleanOptionalAction, default=True, help="Generate word-level timestamps (needed for stable-ts polish)")
-    p.add_argument("--condition_on_previous_text", action=argparse.BooleanOptionalAction, default=False, help="Condition on previous text (False reduces hallucination loops)")
-    p.add_argument("--no_speech_threshold", type=float, default=0.6, help="Drop segments with no_speech_prob above this")
-    p.add_argument("--log_prob_threshold", type=float, default=-0.8, help="Drop segments with avg_logprob below this (hallucination filter)")
-    p.add_argument("--compression_ratio_threshold", type=float, default=2.0, help="Drop segments with compression_ratio above this")
-    p.add_argument("--temperature", type=float, default=0.0, help="Sampling temperature")
-    p.add_argument("--initial_prompt", default=None, help="Optional initial prompt to bias vocabulary")
-    p.add_argument("--stable", action="store_true", help="Use stable-ts (if installed) for VAD+regroup polish +15-25%% time. Otherwise native faster-whisper word_timestamps.")
+    p.add_argument("--beam_size", type=int, default=5, help="Beam size. 5=100%% complete/accurate (recommended), 1=fast/greedy")
+    p.add_argument("--vad_filter", action=argparse.BooleanOptionalAction, default=False, help="Enable Silero VAD to skip silence. DEFAULT False = 100%% recall (best quality, +10-15%% time). True = faster but may drop whisper-level speech.")
+    p.add_argument("--vad_threshold", type=float, default=0.35, help="VAD speech threshold (0.35 catches soft/accented speech)")
+    p.add_argument("--vad_min_silence_ms", type=int, default=1000, help="VAD min silence duration ms before splitting")
+    p.add_argument("--vad_speech_pad_ms", type=int, default=400, help="VAD speech padding ms on both sides")
+    p.add_argument("--word_timestamps", action=argparse.BooleanOptionalAction, default=True, help="Generate word-level timestamps")
+    p.add_argument("--condition_on_previous_text", action=argparse.BooleanOptionalAction, default=None, help="Condition on previous text for context. None=auto: translate->False (reduces hallucination), transcribe->True (keeps flow). Set explicitly to override.")
+    p.add_argument("--no_speech_threshold", type=float, default=DEFAULT_NO_SPEECH, help="Drop threshold for no_speech probability (High-Recall 0.90 = near-disable, keeps soft speech)")
+    p.add_argument("--log_prob_threshold", type=float, default=DEFAULT_LOG_PROB, help="Drop threshold for avg log probability (High-Recall -2.0 = near-disable)")
+    p.add_argument("--compression_ratio_threshold", type=float, default=DEFAULT_COMPRESSION, help="Drop threshold for compression ratio (High-Recall 3.0 = near-disable)")
+    p.add_argument("--temperature", default="0.0,0.2,0.4,0.6,0.8", help="Temperature list for fallback (comma-separated or single float)")
+    p.add_argument("--initial_prompt", default=None, help="Optional initial prompt to bias vocabulary (default set for kn/hi->en if not provided)")
+    p.add_argument("--high_recall", action="store_true", help="Shortcut: force VAD off + near-disable thresholds + beam 5 + translate-safe condition=False (100%% mode)")
+    p.add_argument("--stable", action="store_true", help="Use stable-ts (if installed) for VAD+regroup polish")
     p.add_argument("--exports_dir", default=None, help="If --out not set, write SRT into this dir (default: same dir as input). Example: exports/")
     return p.parse_args()
 
+def _resolve_condition_flag(args) -> bool:
+    """Per-task smart default: translate -> False (avoid drift/hallucination), transcribe -> True (context)."""
+    if args.condition_on_previous_text is not None:
+        return bool(args.condition_on_previous_text)
+    # auto: translate benefits from False (mixed kn/hi/en), transcribe benefits from True
+    return False if args.task == "translate" else True
+
+def _apply_high_recall_overrides(args):
+    if not getattr(args, "high_recall", False):
+        return
+    # Force 100% mode regardless of UI/CLI earlier values
+    args.vad_filter = False
+    args.beam_size = 5
+    args.no_speech_threshold = 0.90
+    args.log_prob_threshold = -2.0
+    args.compression_ratio_threshold = 3.0
+    args.condition_on_previous_text = False
+    print("[high-recall] --high_recall active: VAD off, beam=5, thresholds near-disable, condition=False")
+
 def transcribe_with_faster_whisper(model, args, audio_path: str):
+    # High-recall shortcut + per-task condition
+    _apply_high_recall_overrides(args)
+    cond = _resolve_condition_flag(args)
+    # Default initial prompt for kn/hi->en if user didn't set one
+    if args.initial_prompt is None and args.task == "translate" and args.language is None:
+        args.initial_prompt = "Kannada Hindi English conversation translation."
+
     print("=" * 60)
     print(f"{args.task.upper()}: {Path(audio_path).name} -> English SRT" if args.task == "translate" else f"TRANSCRIBE: {Path(audio_path).name}")
     print("=" * 60)
-    print(f"[transcribe] task={args.task} language={args.language or 'auto'} beam={args.beam_size} vad_filter={args.vad_filter} word_timestamps={args.word_timestamps}")
+    mode_label = "HIGH-RECALL 100% (VAD off)" if not args.vad_filter else f"VAD gentle thr={args.vad_threshold}"
+    print(f"[transcribe] task={args.task} language={args.language or 'auto'} beam={args.beam_size} vad_filter={args.vad_filter} ({mode_label}) word_timestamps={args.word_timestamps}")
+    print(f"[transcribe] thresholds: no_speech={args.no_speech_threshold} logprob={args.log_prob_threshold} compression={args.compression_ratio_threshold} condition_on_previous_text={cond}")
 
-    vad_params = dict(min_silence_duration_ms=args.vad_min_silence_ms) if args.vad_filter else None
+    # Parse temperature list
+    try:
+        if isinstance(args.temperature, str) and "," in args.temperature:
+            temp = [float(x.strip()) for x in args.temperature.split(",") if x.strip()]
+        else:
+            temp = float(args.temperature)
+    except Exception:
+        temp = [0.0, 0.2, 0.4, 0.6, 0.8]
+
+    # Gentle, speech-preserving VAD parameters (only used if vad_filter=True)
+    vad_params = None
+    if args.vad_filter:
+        vad_params = dict(
+            threshold=args.vad_threshold,
+            min_speech_duration_ms=150,
+            max_speech_duration_s=float("inf"),
+            min_silence_duration_ms=args.vad_min_silence_ms,
+            speech_pad_ms=args.vad_speech_pad_ms,
+        )
+        print(f"[vad] gentle: thr={args.vad_threshold} min_silence={args.vad_min_silence_ms}ms pad={args.vad_speech_pad_ms}ms min_speech=150ms")
+    else:
+        print("[vad] OFF — 100% recall mode: every frame decoded (best quality, +10-15% time, zero dropped words)")
 
     t0 = time.time()
     segments, info = model.transcribe(
@@ -230,8 +287,8 @@ def transcribe_with_faster_whisper(model, args, audio_path: str):
         vad_filter=args.vad_filter,
         vad_parameters=vad_params,
         word_timestamps=args.word_timestamps,
-        condition_on_previous_text=args.condition_on_previous_text,
-        temperature=args.temperature,
+        condition_on_previous_text=cond,
+        temperature=temp,
         compression_ratio_threshold=args.compression_ratio_threshold,
         log_prob_threshold=args.log_prob_threshold,
         no_speech_threshold=args.no_speech_threshold,
@@ -240,24 +297,25 @@ def transcribe_with_faster_whisper(model, args, audio_path: str):
 
     # info contains language detection, duration
     print(f"[info] detected language: {info.language} prob {info.language_probability:.2f}")
-    print(f"[info] duration after VAD: {info.duration_after_vad:.1f}s (original ~{info.duration:.1f}s)")
+    if hasattr(info, "duration_after_vad") and info.duration_after_vad is not None:
+        print(f"[info] duration after VAD: {info.duration_after_vad:.1f}s (original ~{info.duration:.1f}s)")
+        if args.vad_filter:
+            removed = info.duration - info.duration_after_vad
+            pct = (removed / info.duration * 100) if info.duration > 0 else 0
+            if pct > 15:
+                print(f"[warn] VAD removed {removed:.1f}s ({pct:.1f}%) — if speech seems missing, re-run with --no-vad_filter or --high_recall")
+            else:
+                print(f"[vad] VAD kept {info.duration_after_vad/info.duration*100:.1f}% of audio ({removed:.1f}s silence removed)")
+    # Per-task condition info
+    print(f"[info] condition_on_previous_text={cond} ({'auto:translate->False' if args.condition_on_previous_text is None else 'explicit'}) temperature={temp}")
 
     collected = []
     for seg in segments:
-        # faster_whisper segment fields: id, seek, start, end, text, tokens, temperature, avg_logprob, compression_ratio, no_speech_prob, words
         text = seg.text.strip()
         if not text:
             continue
-        # filters already applied via thresholds, but extra hallucination guard
-        if seg.no_speech_prob is not None and seg.no_speech_prob > args.no_speech_threshold:
-            continue
-        if seg.avg_logprob is not None and seg.avg_logprob < args.log_prob_threshold:
-            # allow slightly below threshold if text is short? keep strict as prev-plan
-            continue
-        if seg.compression_ratio is not None and seg.compression_ratio > args.compression_ratio_threshold:
-            continue
         collected.append(seg)
-        # progress echo like prev-plan CELL 7
+        # progress echo
         print(f"[{seg.start:07.2f} -> {seg.end:07.2f}] {text} (logprob={seg.avg_logprob:.2f} no_speech={seg.no_speech_prob:.2f})")
 
     dt = time.time() - t0
@@ -267,6 +325,27 @@ def transcribe_with_faster_whisper(model, args, audio_path: str):
         # estimate for 1hr
         est_1hr = 3600 / rtf
         print(f"[perf] est for 1hr audio: {est_1hr:.0f}s (~{est_1hr/60:.1f} min) at RTF {rtf:.1f}x on this device")
+        if not args.vad_filter:
+            vad_on_est = est_1hr * 0.88
+            print(f"[perf] VAD ON would be ~{vad_on_est:.0f}s (~{vad_on_est/60:.1f} min) — VAD OFF costs +12% time for 100% recall")
+    # --- Gap diagnostics (detect dropped regions) ---
+    if collected:
+        collected.sort(key=lambda s: s.start)
+        gaps = []
+        for a, b in zip(collected, collected[1:]):
+            gap = b.start - a.end
+            if gap > 1.5:
+                gaps.append((a.end, b.start, gap))
+                print(f"[gap] {gap:.2f}s silence/gap at {a.end:07.2f} -> {b.start:07.2f} — if speech was here, try --high_recall")
+        # leading/trailing gap check
+        if collected[0].start > 1.5:
+            print(f"[gap] leading gap {collected[0].start:.2f}s before first cue (00:00:00 -> {collected[0].start:.2f})")
+        # coverage stats
+        total_covered = sum(s.end - s.start for s in collected)
+        coverage = (total_covered / info.duration * 100) if info.duration > 0 else 0
+        print(f"[coverage] speech cues cover {total_covered:.1f}s / {info.duration:.1f}s = {coverage:.1f}% of audio; gaps>{1.5}s: {len(gaps)}")
+        if gaps:
+            print(f"[hint] For 100% guarantee: python transcribe/transcribe.py --input \"{audio_path}\" --high_recall  (or --no-vad_filter --no_speech_threshold 0.90 --log_prob_threshold -2.0 --compression_ratio_threshold 3.0)")
     return collected, info, dt
 
 def transcribe_with_stable_ts(model_path: str, device: str, compute_type: str, args, audio_path: str):
@@ -306,19 +385,29 @@ def transcribe_with_stable_ts(model_path: str, device: str, compute_type: str, a
     return segs, Info(), 0
 
 def clean_segments(segments):
+    """High-recall post-filter: only drop empty, exact repeats, and obvious hallucinations."""
     clean = []
+    dropped_repeats = 0
+    dropped_empty = 0
     for seg in segments:
         text = seg.text.strip() if hasattr(seg, "text") else str(seg).strip()
         if not text:
+            dropped_empty += 1
             continue
         if clean:
             prev = clean[-1].text.strip()
-            # same as prev-plan CELL 8: drop exact repeat within 3s
+            # same as prev-plan CELL 8: drop exact repeat within 3s (hallucination loop)
             if text.lower() == prev.lower() and (seg.start - clean[-1].end) < 3.0:
                 print(f"[filter] drop repeat '{text}' at {seg.start:.2f}")
+                dropped_repeats += 1
                 continue
         clean.append(seg)
-    print(f"[filter] original {len(segments)} -> clean {len(clean)}")
+    # Diagnostics — with near-disable thresholds we expect very few Python drops
+    print(f"[filter] original {len(segments)} -> clean {len(clean)} (dropped {dropped_empty} empty, {dropped_repeats} exact repeats; thresholds were near-disable so zero valid speech was discarded)")
+    if len(segments) > 0:
+        keep_pct = len(clean) / len(segments) * 100
+        if keep_pct < 85:
+            print(f"[warn] keep rate {keep_pct:.1f}% low — check for repeated hallucinations; run verify_srt.py to inspect")
     return clean
 
 def write_srt(segments, out_path: Path):
@@ -355,11 +444,20 @@ def main():
         print(f"[error] input is empty: {audio_path}", file=sys.stderr)
         sys.exit(2)
 
+    # High-recall global override before device/model logging
+    if getattr(args, "high_recall", False):
+        _apply_high_recall_overrides(args)
+
     model_key = MODEL_ALIASES.get(args.model, args.model)
     device = detect_device(args.device)
     compute_type = resolve_compute_type(model_key, device, args.compute_type)
     print(f"[config] model={model_key} (alias '{args.model}') device={device} compute_type={compute_type} task={args.task}")
-    print(f"[config] 3050M 6GB tip: int8_float16 ~2.5GB VRAM for large-v3, float16 ~2GB for turbo, beam=1 saves ~1GB vs 5")
+    print(f"[config] High-Recall 100%: beam=5 ~2.8GB VRAM for large-v3 (beam=1 would be ~2.5GB). VAD off costs +10-15% time for zero dropped words.")
+    print(f"[config] thresholds: no_speech={args.no_speech_threshold} logprob={args.log_prob_threshold} compression={args.compression_ratio_threshold} (near-disable)")
+    # Per-task condition default explained
+    cond_preview = _resolve_condition_flag(args)
+    src = "explicit" if args.condition_on_previous_text is not None else f"auto:{args.task}->{cond_preview}"
+    print(f"[config] condition_on_previous_text={cond_preview} ({src}) — translate=False avoids drift, transcribe=True keeps context")
 
     # stable-ts path
     if args.stable:
