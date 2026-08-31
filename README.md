@@ -54,6 +54,9 @@ ffmpeg -version
 
 ### 3. Create Virtual Environment & Install Dependencies
 ```powershell
+# (One-time) Fix PowerShell script execution policy if you get "UnauthorizedAccess" error
+Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+
 # Create venv in project root
 python -m venv venv
 
@@ -69,6 +72,8 @@ pip install -r app/requirements.txt
 # Install ML transcription core (faster-whisper, PyTorch cu121, cuDNN wheels)
 pip install -r transcribe/requirements.txt
 ```
+
+> **PowerShell Execution Policy:** If `.\venv\Scripts\activate` gives `UnauthorizedAccess`, run `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` once. This allows local scripts (like venv activation) to run.
 
 > **Note on CUDA:** `transcribe/requirements.txt` includes `--extra-index-url https://download.pytorch.org/whl/cu121` and standalone `nvidia-cudnn-cu12` wheels. You do **not** need a manual CUDA Toolkit installation if your NVIDIA drivers are up to date.
 
