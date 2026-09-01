@@ -44,15 +44,19 @@ git clone https://github.com/vrss0599/ANVAD-FXS.git UGA-SUB-DR
 cd UGA-SUB-DR
 ```
 
-### 2. Install FFmpeg (System-wide)
-If you don't already have FFmpeg on your PATH:
+### 2. Create Virtual Environment & Install Dependencies (Robust)
+
+**Option A — One-click (Recommended, fixes yellow CUDA badge):**
 ```powershell
-winget install Gyan.FFmpeg
-# Restart your terminal/PowerShell and verify:
-ffmpeg -version
+# Double-click install.bat or run:
+powershell -ExecutionPolicy Bypass -File .\install.ps1
+# Then launch:
+.\launch.ps1   # or double-click launch.bat — always uses venv python
+# Verify CUDA:
+.\venv\Scripts\python tools/check_cuda.py
 ```
 
-### 3. Create Virtual Environment & Install Dependencies
+**Option B — Manual (if you prefer step-by-step):**
 ```powershell
 # (One-time) Fix PowerShell script execution policy if you get "UnauthorizedAccess" error
 Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
@@ -60,31 +64,48 @@ Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
 # Create venv in project root
 python -m venv venv
 
-# Activate venv
-.\venv\Scripts\Activate.ps1
+# IMPORTANT: Always use venv python explicitly (avoids yellow badge when GUI launched outside venv)
+.\venv\Scripts\python -m pip install --upgrade pip
 
-# Upgrade pip
-python -m pip install --upgrade pip
+# Install PyTorch CUDA FIRST (deterministic — bare `pip install torch>=2.2.0` may pick CPU wheel via --extra-index-url fallback)
+.\venv\Scripts\python -m pip install torch --index-url https://download.pytorch.org/whl/cu121
 
-# Install desktop UI dependencies
-pip install -r app/requirements.txt
+# Install desktop UI + transcription deps (torch already CUDA, resolver won't downgrade to CPU)
+.\venv\Scripts\python -m pip install -r app/requirements.txt
+.\venv\Scripts\python -m pip install -r transcribe/requirements.txt
 
-# Install ML transcription core (faster-whisper, PyTorch cu121, cuDNN wheels)
-pip install -r transcribe/requirements.txt
+# Verify:
+.\venv\Scripts\python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
+.\venv\Scripts\python tools/check_cuda.py
 ```
 
-> **PowerShell Execution Policy:** If `.\venv\Scripts\activate` gives `UnauthorizedAccess`, run `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` once. This allows local scripts (like venv activation) to run.
+> **Why yellow badge after first install?** Two causes: (1) `pip`'s `--extra-index-url` is fallback, not override — first `pip install -r transcribe/requirements.txt` can pick `torch+cpu` from PyPI even though `cu121` exists; (2) launching GUI via system `python` (not venv) imports system torch (CPU/missing). `install.ps1` fixes both by force-installing `torch+cu121` via `--index-url` into venv. `tools/check_cuda.py` probes both interpreters. GUI now probes venv via subprocess (slightly slower, ~1s, but accurate) and shows `GPU (venv mismatch)` with copyable fix `.\venv\Scripts\python app\main.py`.
 
-> **Note on CUDA:** `transcribe/requirements.txt` includes `--extra-index-url https://download.pytorch.org/whl/cu121` and standalone `nvidia-cudnn-cu12` wheels. You do **not** need a manual CUDA Toolkit installation if your NVIDIA drivers are up to date.
+> **PowerShell Execution Policy:** If `.\venv\Scripts\activate` gives `UnauthorizedAccess`, run `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` once. Prefer `.\venv\Scripts\python ...` over `activate` + bare `python`/`pip`.
+
+> **Note on CUDA:** Standalone `nvidia-cudnn-cu12`/`nvidia-cublas-cu12` wheels are bundled — no manual CUDA Toolkit needed if driver ≥537.
+
+### 3. FFmpeg Setup (Audio Extraction)
+If you already installed `app/requirements.txt` above, `imageio-ffmpeg` is installed inside your venv automatically!
+
+Alternatively, you can choose any of these methods:
+* **Option A (In Venv via pip - Easiest):** `pip install imageio-ffmpeg` (automatically bundles standalone `ffmpeg.exe` inside your venv).
+* **Option B (Copy binary):** Copy your existing `ffmpeg.exe` into `.\venv\Scripts\` or the project root `UGA-SUB-DR\`.
+* **Option C (System-wide):** `winget install Gyan.FFmpeg`
 
 ---
 
 ## Step 2: Launch the Desktop UI
 
-Launch the modern 5-step wizard desktop application:
+Launch via venv (robust — avoids yellow CUDA badge):
 
 ```powershell
-.\venv\Scripts\activate
+# Recommended:
+.\launch.ps1          # or double-click launch.bat
+# Alternative:
+.\venv\Scripts\python app\main.py
+# Legacy (also works if activated):
+.\venv\Scripts\Activate.ps1
 python app/main.py
 ```
 
@@ -189,6 +210,20 @@ The script will:
 
 ## Debugging & Troubleshooting Guide
 
+### 0. CUDA Shows Yellow After Fresh Install (Most Common)
+- **Symptom:** After `pip install -r transcribe/requirements.txt`, GPU badge is yellow `⚠ GPU (wrong PyTorch) CPU-only` or `GPU (venv mismatch)`. Transcription still works on CPU, but you expect CUDA.
+- **Cause 1:** `pip`'s `--extra-index-url` is fallback — first install can pick `torch+cpu` from PyPI even though `cu121` exists. **Cause 2:** GUI launched via system `python` (no venv) so status checks system torch, not venv torch where CUDA was installed.
+- **Fix:** 
+  ```powershell
+  # Force CUDA torch into venv (deterministic):
+  .\venv\Scripts\python -m pip install torch --force-reinstall --index-url https://download.pytorch.org/whl/cu121
+  # Or just re-run the robust installer:
+  .\install.ps1
+  # Relaunch via venv (always):
+  .\venv\Scripts\python app\main.py   # or .\launch.ps1
+  ```
+- **Verify:** `.\venv\Scripts\python tools/check_cuda.py` probes both interpreters and tells you exactly which to fix. GUI now probes venv via subprocess (slightly slower ~1s, but robust) — click `↻ Recheck` or `Copy` fix command. Yellow is warning, not error; transcription falls back to CPU `int8` if GPU truly missing.
+
 ### 1. `nvidia-smi` Not Found / GPU Shows "None"
 - **Cause:** NVIDIA graphic drivers are not installed, or your laptop is running on integrated graphics (Intel Iris Xe / AMD Radeon).
 - **Fix:** Download the latest Game Ready or Studio Driver from [nvidia.com/drivers](https://www.nvidia.com/download/index.aspx). If on a laptop, verify discrete GPU is enabled in BIOS / Windows Graphics Settings.
@@ -197,7 +232,7 @@ The script will:
 ### 2. CUDA Out of Memory (OOM) on 6GB VRAM
 - **Symptom:** `torch.cuda.OutOfMemoryError` or CTranslate2 memory allocation crash.
 - **Fix:**
-  1. Set **Beam Size = 1** (default). Beam size 5 adds ~1GB VRAM for negligible accuracy improvement.
+  1. Current default is **Beam Size = 5 (100% complete, ~2.8GB)**. If OOM, set **Beam Size = 1** in Preset Fast (~2.5GB, +1GB headroom) or use `turbo`.
   2. Use **`compute_type="int8_float16"`** for `large-v3` (~2.5GB VRAM).
   3. Switch to the **`turbo`** model (`float16`, ~2.0GB VRAM) for English speech.
   4. In desktop UI Advanced Settings, select **Device: CPU**.

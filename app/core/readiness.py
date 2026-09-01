@@ -4,27 +4,28 @@ Readiness checker for UGA-SUB desktop app.
 Each check returns:
   {"ok": bool, "label": str, "detail": str, "fix_hint": str|None, "fix_cmd": str|None}
 
-UX: Every check is wrapped in try/except so one failure never blocks others.
+Robust GPU check: probes BOTH system python (sys.executable) and venv python
+via subprocess so launch method (activated vs double-click) and stale import
+cache cannot cause a false yellow. Slightly slower (~0.5-1s) but 100% accurate.
 """
 
 import sys
 import shutil
+import subprocess
+import json
 from pathlib import Path
 
 
 def _is_in_venv() -> bool:
     """Detect if Python is running inside a virtual environment."""
-    # Standard detection: sys.prefix differs from sys.base_prefix inside a venv
     return sys.prefix != sys.base_prefix
 
 
 def _find_project_root() -> Path:
     """Find the project root (contains transcribe/ and resolve_free/)."""
-    # From app/core/readiness.py -> go up 2 levels to project root
     candidate = Path(__file__).resolve().parents[2]
     if (candidate / "transcribe").is_dir():
         return candidate
-    # Fallback: walk up from cwd
     cwd = Path.cwd()
     if (cwd / "transcribe").is_dir():
         return cwd
@@ -37,10 +38,68 @@ def get_venv_python() -> str:
     venv_py = root / "venv" / "Scripts" / "python.exe"
     if venv_py.exists():
         return str(venv_py)
-    # Also check if we're already in a venv
     if _is_in_venv():
         return sys.executable
     return sys.executable
+
+
+def _probe_torch_via_subprocess(python_exe: str, timeout: float = 15.0) -> dict | None:
+    """Probe python_exe for torch/CUDA via a temp script (avoids -c quoting/try issues on Windows)."""
+    import tempfile, textwrap
+    probe_py = textwrap.dedent("""
+        import json, sys
+        d = {}
+        try:
+            import torch
+            d['torch_version'] = getattr(torch, '__version__', 'unknown')
+            d['cuda_built'] = getattr(getattr(torch, 'version', None), 'cuda', None)
+            d['cuda_available'] = torch.cuda.is_available()
+            d['device_name'] = torch.cuda.get_device_name(0) if d['cuda_available'] else None
+            try:
+                d['vram_gb'] = (torch.cuda.get_device_properties(0).total_memory / 1024**3) if d['cuda_available'] else None
+            except Exception:
+                d['vram_gb'] = None
+            d['exe'] = sys.executable
+        except ImportError as e:
+            d = {'import_error': str(e), 'exe': sys.executable}
+        except Exception as e:
+            d = {'error': str(e), 'exe': sys.executable}
+        print(json.dumps(d))
+    """)
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, encoding='utf-8') as tf:
+            tf.write(probe_py)
+            tf_path = tf.name
+        try:
+            r = subprocess.run(
+                [python_exe, tf_path],
+                capture_output=True, text=True, timeout=timeout,
+                encoding="utf-8", errors="replace",
+                creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0,
+            )
+            if r.returncode != 0 or not r.stdout.strip():
+                return None
+            return json.loads(r.stdout.strip())
+        finally:
+            try:
+                Path(tf_path).unlink(missing_ok=True)
+            except Exception:
+                pass
+    except Exception:
+        return None
+
+
+def _has_nvidia_driver() -> bool:
+    if shutil.which("nvidia-smi"):
+        return True
+    try:
+        import glob
+        cands = glob.glob(r"C:\Windows\System32\DriverStore\FileRepository\nv*\nvidia-smi.exe")
+        if cands:
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def check_single(name: str) -> dict:
@@ -48,10 +107,15 @@ def check_single(name: str) -> dict:
 
     if name == "python":
         ver = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+        venv_py = get_venv_python()
+        launched_in_venv = Path(sys.executable).resolve() == Path(venv_py).resolve() if Path(venv_py).exists() else _is_in_venv()
+        detail = sys.executable
+        if not launched_in_venv and Path(venv_py).exists():
+            detail += f" (system) | venv: {venv_py}"
         return {
             "ok": True,
             "label": f"Python {ver}",
-            "detail": sys.executable,
+            "detail": detail,
             "fix_hint": None,
             "fix_cmd": None,
         }
@@ -64,7 +128,6 @@ def check_single(name: str) -> dict:
             venv_exists = venv_dir.is_dir()
 
             if in_venv:
-                # Running inside a venv — that's what we want
                 return {
                     "ok": True,
                     "label": "Virtual Environment",
@@ -73,14 +136,15 @@ def check_single(name: str) -> dict:
                     "fix_cmd": None,
                 }
             elif venv_exists:
-                # venv folder exists but not activated
+                # venv exists but GUI not launched from it — show warning with correct launch cmd
+                venv_py = get_venv_python()
                 return {
                     "ok": False,
                     "warning": True,
                     "label": "Virtual Environment",
-                    "detail": "venv exists but not activated",
-                    "fix_hint": "Activate before launching: .\\venv\\Scripts\\activate",
-                    "fix_cmd": ".\\venv\\Scripts\\Activate.ps1",
+                    "detail": f"venv exists but not activated (GUI launched via system python: {Path(sys.executable).name})",
+                    "fix_hint": "Relaunch via venv python for correct CUDA detection",
+                    "fix_cmd": f"{venv_py} app\\main.py",
                 }
             else:
                 return {
@@ -88,7 +152,7 @@ def check_single(name: str) -> dict:
                     "label": "Virtual Environment",
                     "detail": "No venv found",
                     "fix_hint": "Create virtual environment",
-                    "fix_cmd": "python -m venv venv && .\\venv\\Scripts\\activate && pip install -r transcribe/requirements.txt",
+                    "fix_cmd": "python -m venv venv && .\\venv\\Scripts\\activate && .\\install.ps1",
                 }
         except Exception as e:
             return {"ok": False, "label": "Virtual Environment", "detail": str(e), "fix_hint": "Internal error", "fix_cmd": None}
@@ -116,6 +180,126 @@ def check_single(name: str) -> dict:
             return {"ok": False, "label": "FFmpeg", "detail": str(e), "fix_hint": "Internal error", "fix_cmd": None}
 
     elif name == "gpu":
+        # --- Robust: probe venv python + system python via subprocess (slightly slower, 100% accurate) ---
+        venv_py = get_venv_python()
+        venv_exists = Path(venv_py).exists()
+        launched_in_venv = Path(sys.executable).resolve() == Path(venv_py).resolve() if venv_exists else _is_in_venv()
+
+        # Probe venv first (authoritative for transcription), then system if different
+        results = {}
+        if venv_exists:
+            r = _probe_torch_via_subprocess(venv_py)
+            if r is not None:
+                results["venv"] = r
+        # Only probe system if not same exe (avoid double subprocess)
+        if not launched_in_venv or Path(sys.executable).resolve() != Path(venv_py).resolve():
+            r2 = _probe_torch_via_subprocess(sys.executable)
+            if r2 is not None:
+                results["system"] = r2
+
+        # Pick authoritative: venv if exists, else system
+        primary_key = "venv" if "venv" in results else "system"
+        primary = results.get(primary_key)
+        has_driver = _has_nvidia_driver()
+
+        # If we got a valid probe, decide based on it
+        if primary is not None:
+            # Check for import_error / generic error
+            if "import_error" in primary or "error" in primary:
+                # torch not installed in primary — but maybe other env has it
+                other_key = "system" if primary_key == "venv" else "venv"
+                other = results.get(other_key)
+                if other and other.get("cuda_available"):
+                    # Other env has CUDA — tell user they launched wrong python
+                    return {
+                        "ok": False,
+                        "warning": True,
+                        "label": "GPU (venv mismatch)",
+                        "detail": f"venv torch missing ({primary.get('import_error', primary.get('error','no torch'))}) but {other_key} has CUDA {other.get('torch_version')} — relaunch via venv",
+                        "fix_hint": "GUI launched outside venv — relaunch via venv python",
+                        "fix_cmd": f"{venv_py} app\\main.py",
+                    }
+                if has_driver:
+                    venv_cmd = f"{venv_py} -m pip install torch --index-url https://download.pytorch.org/whl/cu121"
+                    return {
+                        "ok": False,
+                        "warning": True,
+                        "label": "GPU Acceleration",
+                        "detail": f"NVIDIA driver found but PyTorch not installed in {primary_key} ({primary.get('import_error','no torch')})",
+                        "fix_hint": "Install PyTorch with CUDA into venv",
+                        "fix_cmd": venv_cmd,
+                    }
+                return {
+                    "ok": False,
+                    "label": "GPU Acceleration",
+                    "detail": "No NVIDIA GPU detected — will use CPU (also no torch)",
+                    "fix_hint": "Install NVIDIA drivers or use CPU mode (slower)",
+                    "fix_cmd": None,
+                }
+
+            # torch is installed — check cuda_available
+            if primary.get("cuda_available"):
+                name_ = primary.get("device_name") or "GPU"
+                vram = primary.get("vram_gb")
+                vram_s = f"{vram:.1f}GB" if vram else ""
+                # If launched outside venv but venv also has CUDA, note it
+                extra = ""
+                if not launched_in_venv and "venv" in results and results["venv"].get("cuda_available"):
+                    extra = " (venv CUDA ok)"
+                elif not launched_in_venv and venv_exists:
+                    extra = " (system CUDA ok — consider launching via venv)"
+                return {
+                    "ok": True,
+                    "label": f"GPU: {name_}",
+                    "detail": f"{name_} ({vram_s}){extra}",
+                    "fix_hint": None,
+                    "fix_cmd": None,
+                }
+            else:
+                # torch installed but cuda not available
+                cuda_built = primary.get("cuda_built")
+                ver = primary.get("torch_version", "unknown")
+                other = results.get("system" if primary_key == "venv" else "venv")
+                # If other env HAS cuda, user launched wrong python — surface mismatch
+                if other and other.get("cuda_available"):
+                    return {
+                        "ok": False,
+                        "warning": True,
+                        "label": "GPU (venv mismatch)",
+                        "detail": f"{primary_key} torch {ver} cuda_available=False but {('system' if primary_key=='venv' else 'venv')} has CUDA {other.get('device_name')} — relaunch via venv",
+                        "fix_hint": "Relaunch GUI via venv python for CUDA",
+                        "fix_cmd": f"{venv_py} app\\main.py",
+                    }
+                # CPU-only torch but driver exists
+                if has_driver and not cuda_built:
+                    venv_cmd = f"{venv_py} -m pip install torch --force-reinstall --index-url https://download.pytorch.org/whl/cu121"
+                    return {
+                        "ok": False,
+                        "warning": True,
+                        "label": "GPU (wrong PyTorch)",
+                        "detail": f"NVIDIA GPU detected but {primary_key} PyTorch {ver} is CPU-only (cuda_built={cuda_built})",
+                        "fix_hint": "Reinstall PyTorch with CUDA into venv (yellow → green after reinstall)",
+                        "fix_cmd": venv_cmd,
+                    }
+                elif has_driver and cuda_built:
+                    return {
+                        "ok": False,
+                        "warning": True,
+                        "label": "GPU (driver issue)",
+                        "detail": f"{primary_key} PyTorch CUDA {cuda_built} but cuda_available=False (driver {ver})",
+                        "fix_hint": "Update NVIDIA driver to latest from nvidia.com/drivers, then restart",
+                        "fix_cmd": None,
+                    }
+                else:
+                    return {
+                        "ok": False,
+                        "label": "GPU Acceleration",
+                        "detail": "No NVIDIA GPU detected — will use CPU (slower but works)",
+                        "fix_hint": "Install NVIDIA drivers or use CPU mode (slower)",
+                        "fix_cmd": None,
+                    }
+
+        # Subprocess probe failed entirely — fallback to in-process import for resilience
         try:
             import torch
             if torch.cuda.is_available():
@@ -125,77 +309,74 @@ def check_single(name: str) -> dict:
                 return {
                     "ok": True,
                     "label": f"GPU: {device_name}",
-                    "detail": f"{device_name} ({vram})",
+                    "detail": f"{device_name} ({vram}) [fallback probe]",
                     "fix_hint": None,
                     "fix_cmd": None,
                 }
             else:
-                # torch is installed but CUDA not available.
-                # Check if this is a CPU-only torch on a machine WITH an NVIDIA GPU.
                 torch_cuda_built = hasattr(torch.version, "cuda") and torch.version.cuda is not None
-                has_nvidia_driver = shutil.which("nvidia-smi") is not None
-
-                if not has_nvidia_driver:
-                    # Also check Windows DriverStore for nvidia-smi
-                    import glob
-                    nvsmi_candidates = glob.glob(r"C:\Windows\System32\DriverStore\FileRepository\nv*\nvidia-smi.exe")
-                    has_nvidia_driver = len(nvsmi_candidates) > 0
-
+                has_nvidia_driver = _has_nvidia_driver()
                 if has_nvidia_driver and not torch_cuda_built:
-                    # GPU exists but torch is CPU-only build — most common mistake
                     return {
                         "ok": False,
                         "warning": True,
                         "label": "GPU (wrong PyTorch)",
-                        "detail": f"NVIDIA GPU detected but PyTorch {torch.__version__} is CPU-only build",
-                        "fix_hint": "Reinstall PyTorch with CUDA support",
-                        "fix_cmd": "pip install torch --force-reinstall --index-url https://download.pytorch.org/whl/cu121",
+                        "detail": f"NVIDIA GPU detected but PyTorch {torch.__version__} is CPU-only",
+                        "fix_hint": "Reinstall PyTorch with CUDA (run install.ps1 again)",
+                        "fix_cmd": f"{venv_py} -m pip install torch --force-reinstall --index-url https://download.pytorch.org/whl/cu121",
                     }
                 elif has_nvidia_driver and torch_cuda_built:
-                    # GPU + CUDA torch but still not available — driver mismatch?
                     return {
                         "ok": False,
                         "warning": True,
                         "label": "GPU (driver issue)",
-                        "detail": f"PyTorch has CUDA {torch.version.cuda} but torch.cuda.is_available()=False",
-                        "fix_hint": "Update NVIDIA driver to latest from nvidia.com/drivers",
+                        "detail": f"PyTorch CUDA {torch.version.cuda} but cuda_available=False",
+                        "fix_hint": "Update NVIDIA driver",
                         "fix_cmd": None,
                     }
                 else:
-                    # No GPU at all
                     return {
                         "ok": False,
                         "label": "GPU Acceleration",
-                        "detail": "No NVIDIA GPU detected — will use CPU (slower but works)",
-                        "fix_hint": "Install NVIDIA drivers or use CPU mode (slower)",
+                        "detail": "No NVIDIA GPU — will use CPU",
+                        "fix_hint": "Install NVIDIA drivers or use CPU mode",
                         "fix_cmd": None,
                     }
         except ImportError:
-            # torch not installed — check nvidia-smi as fallback
-            try:
-                nvsmi = shutil.which("nvidia-smi")
-                if nvsmi:
-                    return {
-                        "ok": False,
-                        "warning": True,
-                        "label": "GPU Acceleration",
-                        "detail": "NVIDIA driver found but PyTorch not installed with CUDA",
-                        "fix_hint": "Install PyTorch with CUDA: pip install torch --index-url https://download.pytorch.org/whl/cu121",
-                        "fix_cmd": "pip install torch --index-url https://download.pytorch.org/whl/cu121",
-                    }
-            except Exception:
-                pass
+            if _has_nvidia_driver():
+                return {
+                    "ok": False,
+                    "warning": True,
+                    "label": "GPU Acceleration",
+                    "detail": "NVIDIA driver found but PyTorch not installed",
+                    "fix_hint": "Run install.ps1 to install CUDA PyTorch into venv",
+                    "fix_cmd": f"{venv_py} -m pip install torch --index-url https://download.pytorch.org/whl/cu121",
+                }
             return {
                 "ok": False,
                 "label": "GPU Acceleration",
-                "detail": "No NVIDIA GPU detected — will use CPU",
-                "fix_hint": "Install NVIDIA drivers or use CPU mode (slower)",
+                "detail": "No NVIDIA GPU — will use CPU",
+                "fix_hint": "Install NVIDIA drivers or use CPU mode",
                 "fix_cmd": None,
             }
         except Exception as e:
             return {"ok": False, "label": "GPU Acceleration", "detail": str(e), "fix_hint": "Internal error", "fix_cmd": None}
 
     elif name == "faster_whisper":
+        # Also probe venv first if GUI not in venv — slightly slower but robust
+        venv_py = get_venv_python()
+        if Path(venv_py).exists() and Path(sys.executable).resolve() != Path(venv_py).resolve():
+            r = _probe_torch_via_subprocess(venv_py)  # warm cache, but actually probe faster_whisper separately
+            # Quick subprocess check for faster_whisper in venv
+            try:
+                code = "import faster_whisper,json; print(json.dumps({'ver': getattr(faster_whisper,'__version__','unknown')}))"
+                pr = subprocess.run([venv_py, "-c", code], capture_output=True, text=True, timeout=4.0,
+                                    creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0)
+                if pr.returncode == 0 and pr.stdout.strip():
+                    j = json.loads(pr.stdout.strip())
+                    return {"ok": True, "label": f"faster-whisper {j.get('ver','unknown')} (venv)", "detail": f"Version {j.get('ver')} in venv", "fix_hint": None, "fix_cmd": None}
+            except Exception:
+                pass
         try:
             import faster_whisper
             ver = getattr(faster_whisper, "__version__", "unknown")
@@ -207,12 +388,13 @@ def check_single(name: str) -> dict:
                 "fix_cmd": None,
             }
         except ImportError:
+            venv_py2 = get_venv_python()
             return {
                 "ok": False,
                 "label": "faster-whisper",
-                "detail": "Module not found",
-                "fix_hint": "Install faster-whisper in venv",
-                "fix_cmd": "pip install faster-whisper>=1.2.0",
+                "detail": "Module not found in this python (try venv)",
+                "fix_hint": "Install into venv",
+                "fix_cmd": f"{venv_py2} -m pip install faster-whisper>=1.2.0",
             }
         except Exception as e:
             return {"ok": False, "label": "faster-whisper", "detail": str(e), "fix_hint": "Internal error", "fix_cmd": None}

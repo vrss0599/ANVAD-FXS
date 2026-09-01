@@ -1,9 +1,18 @@
 # ENV-A: Local STT for RTX 3050 Mobile 6GB 120W — faster-whisper CTranslate2
 # Tested: Python 3.10.11 x64, Windows 10/11, DaVinci Resolve FREE console Py3 sees same Python
-# Install:  python -m venv venv
-#           venv\Scripts\activate
-#           pip install -r transcribe/requirements.txt
-# First run will download model (~1.5-2.9GB) to %USERPROFILE%\.cache\huggingface
+# Robust install (fixes yellow CUDA badge after first install):
+#   Use the provided install scripts — they force CUDA torch correctly:
+#     .\install.ps1        (or install.bat)
+#   Or manually in order:
+#     python -m venv venv
+#     .\venv\Scripts\activate
+#     .\venv\Scripts\python -m pip install --upgrade pip
+#     .\venv\Scripts\python -m pip install torch --index-url https://download.pytorch.org/whl/cu121
+#     .\venv\Scripts\python -m pip install -r app/requirements.txt
+#     .\venv\Scripts\python -m pip install -r transcribe/requirements.txt
+#   Verify:  .\venv\Scripts\python tools/check_cuda.py
+#   Or:      .\venv\Scripts\python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
+# First transcription run will download model (~1.5-2.9GB) to %USERPROFILE%\.cache\huggingface
 
 --extra-index-url https://download.pytorch.org/whl/cu121
 
@@ -18,8 +27,13 @@ av>=11.0.0
 nvidia-cudnn-cu12==9.* ; sys_platform == "win32"
 nvidia-cublas-cu12 ; sys_platform == "win32"
 
-# Torch only for device detection + empty_cache(); faster-whisper itself does NOT need torch
-# Use cu121 wheels for 3050 (matches CUDA 12.1). If you use CPU-only, install torch cpu wheel instead.
+# Torch — device detection + empty_cache(); faster-whisper itself does NOT need torch.
+# IMPORTANT: Do NOT rely on bare `torch>=2.2.0` here alone — pip's --extra-index-url is fallback, not override,
+# so a CPU wheel from PyPI may be chosen on first install (causes yellow badge).
+# The install.ps1/install.bat force-installs CUDA torch via --index-url BEFORE this file.
+# Keeping the line here as fallback ensures pip will not downgrade an existing CUDA torch,
+# but the authoritative install is the explicit `pip install torch --index-url .../cu121` step above.
+# If you must use CPU-only, replace with:  pip install torch --index-url https://download.pytorch.org/whl/cpu
 torch>=2.2.0
 
 # Optional — only for --stable (VAD regroup, +15-25% time, slightly better timestamps)
