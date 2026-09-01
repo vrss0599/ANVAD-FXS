@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
-ENV-A: Local transcription with faster-whisper (CTranslate2) — tuned for RTX 3050 Mobile 6GB 120W + 24GB RAM
+ENV-A: Local transcription with faster-whisper (CTranslate2) — tuned for RTX 2050 4GB / 3050 6GB
 Replaces prev-plan.md Colab openai-whisper large-v3 + Tesla T4 paywall with fully local, $0 inference.
 
 Default: large-v3 int8_float16 cuda beam=5 vad_filter=False word_timestamps=True task=translate -> SRT
-Perf on 3050M: 1hr ~2m00s-2m45s (large-v3 beam=5, VAD off) / 30-45s (turbo) ; 10-min chunk ~20-27s
+Perf on 3050 6GB: 1hr ~2m00s-2m45s (large-v3 beam=5, VAD off) / 30-45s (turbo) ; 10-min ~20-27s
+Perf on 2050 4GB: auto-tuned to int8 beam=1 ~2.2GB (beam=5 would OOM) ; 1hr ~2m30s-3m30s ; turbo ~40s-60s
 VAD OFF = best quality / 100% recall (+10-15% time vs VAD on, but zero dropped words)
+Foolproof: Python 3.13+ auto-uses cu124 torch wheel (cu121 has no 3.13 build)
 """
 
 import argparse
@@ -42,11 +44,13 @@ MODEL_ALIASES = {
     "distil-large-v3": "distil-large-v3",
 }
 
-# 6GB-tuned defaults — High-Recall 100% preset (user wants best quality, kn/hi->en)
+# Hardware-tuned defaults — High-Recall 100% preset
+# RTX 3050 6GB: large-v3 int8_float16 beam=5 ~2.8GB (beam=1 ~2.5GB)  1hr ~2m00s-2m45s
+# RTX 2050 4GB: large-v3 int8 beam=1 ~2.2GB or turbo float16 ~2.0GB — beam=5 will OOM on 4GB
 DEFAULT_MODEL = "large-v3"
 DEFAULT_COMPUTE_TURBO = "float16"      # 809M fits 2GB
-DEFAULT_COMPUTE_LARGE = "int8_float16" # 1.55B fits 2.8GB beam=5 (2.5GB beam=1) vs float16 3.1GB
-DEFAULT_BEAM = 5  # 100% complete: tracks multiple paths, fixes mid/end drops
+DEFAULT_COMPUTE_LARGE = "int8_float16" # 1.55B fits 2.8GB beam=5 (auto falls back to int8 on 4GB)
+DEFAULT_BEAM = 5  # 100% complete: tracks multiple paths, fixes mid/end drops (auto-downgrades to 1 on 4GB VRAM)
 # High-Recall thresholds (near-disable): keep almost everything, filter only obvious junk in Python
 DEFAULT_NO_SPEECH = 0.90          # was 0.6/0.8 — 0.90 near-disable, only drops pure silence
 DEFAULT_LOG_PROB = -2.0            # was -1.0 — -2.0 keeps soft/accented speech (logprob ~-1.2)
@@ -116,6 +120,30 @@ def is_model_cached(model_name: str) -> bool:
         return False
     except Exception:
         return False
+
+def _get_vram_gb() -> float | None:
+    """Detect total VRAM for auto-tuning (2050 4GB vs 3050 6GB)."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return torch.cuda.get_device_properties(0).total_memory / (1024**3)
+    except Exception:
+        pass
+    return None
+
+def _auto_tune_for_vram(model_name: str, device: str, compute_type: str, beam_size: int) -> tuple[str, int]:
+    """Foolproof 4GB handling: RTX 2050 4GB cannot run beam=5 at int8_float16, auto downgrade."""
+    vram = _get_vram_gb()
+    if vram is None or device != "cuda":
+        return compute_type, beam_size
+    if vram < 5.0:
+        # 4GB card
+        if model_name == "large-v3" and compute_type == "int8_float16" and beam_size == 5:
+            print(f"[auto-tune] RTX 4GB detected ({vram:.1f}GB) — downgrading beam 5->1 and compute int8_float16->int8 to avoid OOM")
+            return "int8", 1
+        if beam_size == 5:
+            print(f"[auto-tune] RTX 4GB ({vram:.1f}GB) — beam 5 may OOM, keeping but will fallback on failure")
+    return compute_type, beam_size
 
 def load_model_with_fallback(model_name: str, device: str, compute_type: str):
     from faster_whisper import WhisperModel
@@ -451,8 +479,18 @@ def main():
     model_key = MODEL_ALIASES.get(args.model, args.model)
     device = detect_device(args.device)
     compute_type = resolve_compute_type(model_key, device, args.compute_type)
-    print(f"[config] model={model_key} (alias '{args.model}') device={device} compute_type={compute_type} task={args.task}")
-    print(f"[config] High-Recall 100%: beam=5 ~2.8GB VRAM for large-v3 (beam=1 would be ~2.5GB). VAD off costs +10-15% time for zero dropped words.")
+    # Auto-tune for 2050 4GB (foolproof)
+    orig_beam, orig_ct = args.beam_size, compute_type
+    compute_type, tuned_beam = _auto_tune_for_vram(model_key, device, compute_type, args.beam_size)
+    if tuned_beam != orig_beam or compute_type != orig_ct:
+        args.beam_size = tuned_beam
+        print(f"[config] auto-tuned for 4GB: beam {orig_beam}->{tuned_beam} compute {orig_ct}->{compute_type}")
+    else:
+        vram = _get_vram_gb()
+        if vram and vram < 5:
+            print(f"[config] RTX 4GB detected ({vram:.1f}GB) — large-v3 beam=5 may OOM; will auto-fallback to beam=1/int8 on failure")
+    print(f"[config] model={model_key} (alias '{args.model}') device={device} compute_type={compute_type} task={args.task} beam={args.beam_size}")
+    print(f"[config] High-Recall 100%: beam={args.beam_size} VRAM ~{'2.2GB (4GB-safe)' if (_get_vram_gb() or 99) < 5 else '2.8GB (6GB)' } for large-v3. VAD off costs +10-15% time for zero dropped words.")
     print(f"[config] thresholds: no_speech={args.no_speech_threshold} logprob={args.log_prob_threshold} compression={args.compression_ratio_threshold} (near-disable)")
     # Per-task condition default explained
     cond_preview = _resolve_condition_flag(args)

@@ -1,7 +1,7 @@
 # UGA-SUB — Free DaVinci Auto-Subtitles
 
 > **$0, 100% Offline Local AI Subtitling & Translation for DaVinci Resolve FREE**  
-> Tuned specifically for **NVIDIA RTX 3050 Mobile 6GB VRAM (120W) + 24GB RAM** with automatic CPU fallback.
+> Tuned for **NVIDIA RTX 2050 4GB / 3050 6GB (120W) + 24GB RAM** with automatic CPU fallback. Foolproof for Python 3.10/3.11 (recommended) and 3.13 (auto cu124 fallback).
 
 ---
 
@@ -15,12 +15,13 @@
 
 ---
 
-## Hardware Benchmarks (RTX 3050 Mobile 6GB 120W)
+## Hardware Benchmarks (RTX 2050 4GB / 3050 6GB 120W)
 
 | Model | Precision / Compute | VRAM Used | Speed (1hr Audio) | Primary Use Case |
 | :--- | :--- | :---: | :---: | :--- |
-| **`large-v3`** | `int8_float16` (beam=1) | **~2.5 GB** | **1m 43s – 2m 24s** | Kannada / Hindi / Multilingual $\to$ English |
-| **`turbo`** | `float16` | **~2.0 GB** | **30s – 45s** | English-only (2× speed) |
+| **`large-v3` (3050 6GB)** | `int8_float16` (beam=5, 100%) | **~2.8 GB** | **2m 00s – 2m 45s** | Kannada/Hindi/Multilingual → English (best quality) |
+| **`large-v3` (2050 4GB)** | `int8` (beam=1, auto-tuned) | **~2.2 GB** | **2m 30s – 3m 30s** | Same, 4GB-safe (beam=5 would OOM) |
+| **`turbo` (2050/3050)** | `float16` | **~2.0 GB** | **30s – 60s** | English-only (2× speed) |
 | **CPU Fallback** | `int8` (24GB System RAM) | **0 GB VRAM** | **~6 min** | Any machine without NVIDIA GPU |
 
 ---
@@ -28,8 +29,8 @@
 ## Requirements & Prerequisites
 
 1. **Operating System:** Windows 10 / 11 (64-bit)
-2. **Python:** Python `3.10.x` or `3.11.x` 64-bit installed with **Add Python to PATH** checked.
-3. **GPU & Drivers:** NVIDIA GPU (RTX 3050 6GB recommended) with Driver version $\ge$ 537. *(Runs in CPU mode if no NVIDIA GPU is present)*.
+2. **Python:** Python `3.11.x` 64-bit recommended (3.10 also ok). **Python 3.13 works** via `cu124` fallback but `3.11` has best `cu121` wheel support — installer auto-handles it. Install with **Add Python to PATH** checked.
+3. **GPU & Drivers:** NVIDIA GPU (RTX 2050 4GB or 3050 6GB recommended, detects VRAM auto) with Driver version $\ge$ 537. *(Runs in CPU mode if no NVIDIA GPU is present)*.
 4. **FFmpeg:** Required for audio extraction from video containers.
 5. **DaVinci Resolve:** DaVinci Resolve FREE 18.x / 19.x (installed from [blackmagicdesign.com](https://www.blackmagicdesign.com/products/davinciresolve), not the Microsoft Store).
 

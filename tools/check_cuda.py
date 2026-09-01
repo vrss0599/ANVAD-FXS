@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""
+r"""
 check_cuda.py — Robust CUDA diagnostic for UGA-SUB.
 
 Probes BOTH system python and venv python via subprocess (same logic as readiness.py)
 so launch-method bugs cannot hide. Run:
   python tools/check_cuda.py
-  .\venv\Scripts\python tools/check_cuda.py
+  venv\Scripts\python tools/check_cuda.py
 
 Also checks nvidia-smi, ctranslate2, faster-whisper.
-Windows-safe: forces utf-8 output, avoids cp1252 emoji issues.
+Windows-safe: forces utf-8 output, avoids cp1252 issues.
+Handles Python 3.13 + cu121 missing wheel case explicitly.
+Supports RTX 2050 4GB / 3050 6GB.
 """
 import sys, shutil, subprocess, json, glob, tempfile, textwrap
 from pathlib import Path
@@ -41,10 +43,11 @@ def probe(python_exe, timeout=15):
             except Exception:
                 d['vram_gb'] = None
             d['exe'] = sys.executable
+            d['py_version'] = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
         except ImportError as e:
-            d = {'import_error': str(e), 'exe': sys.executable}
+            d = {'import_error': str(e), 'exe': sys.executable, 'py_version': f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"}
         except Exception as e:
-            d = {'error': str(e), 'exe': sys.executable}
+            d = {'error': str(e), 'exe': sys.executable, 'py_version': f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"}
         print(json.dumps(d))
     """)
     try:
@@ -93,24 +96,45 @@ def main():
         print("\n--- verdict ---")
         def has_cuda(d): return d.get("cuda_available") is True
         if has_cuda(pvenv) and not has_cuda(psys):
-            print("[OK] venv has CUDA but system does not — launch GUI via venv:  .\\venv\\Scripts\\python app\\main.py (or .\\launch.ps1)")
+            print("[OK] venv has CUDA but system does not — launch GUI via venv:  venv\\Scripts\\python app\\main.py (or launch.bat)")
         elif has_cuda(pvenv) and has_cuda(psys):
             print("[OK] Both have CUDA — any launch method works, but venv is recommended.")
         elif not has_cuda(pvenv) and has_cuda(psys):
-            print("[WARN] system has CUDA but venv does not — reinstall into venv:  .\\venv\\Scripts\\python -m pip install torch --force-reinstall --index-url https://download.pytorch.org/whl/cu121")
+            print("[WARN] system has CUDA but venv does not — reinstall into venv:  venv\\Scripts\\python -m pip install torch --force-reinstall --index-url https://download.pytorch.org/whl/cu124")
         elif pvenv.get("import_error"):
-            print("[FAIL] venv missing torch — run:  .\\install.ps1  or  .\\venv\\Scripts\\python -m pip install torch --index-url https://download.pytorch.org/whl/cu121")
+            pyv = pvenv.get("py_version","?")
+            if pyv.startswith("3.13") or pyv.startswith("3.14"):
+                print(f"[FAIL] venv Python {pyv} missing torch — PyTorch cu121 has no cp313 wheel. Fix: install Python 3.11, or run:  venv\\Scripts\\python -m pip install torch --index-url https://download.pytorch.org/whl/cu124")
+            else:
+                print("[FAIL] venv missing torch — run:  install.bat  or  venv\\Scripts\\python -m pip install torch --index-url https://download.pytorch.org/whl/cu121")
         else:
-            print(f"[FAIL] venv cuda_available=False (built={pvenv.get('cuda_built')}) — check driver >=537 and torch CUDA wheel. Fix: .\\venv\\Scripts\\python -m pip install torch --force-reinstall --index-url https://download.pytorch.org/whl/cu121")
+            # Check if 3.13 cpu torch case
+            if pvenv.get("cuda_built") is None and str(pvenv.get("py_version","")).startswith("3.13"):
+                print(f"[FAIL] CPU-only torch {pvenv.get('torch_version')} on Python {pvenv.get('py_version')} — cu121 has no 3.13 wheel. Fix:  venv\\Scripts\\python -m pip install torch --force-reinstall --index-url https://download.pytorch.org/whl/cu124  OR use Python 3.11")
+            else:
+                print(f"[FAIL] venv cuda_available=False (built={pvenv.get('cuda_built')}) — check driver >=537 and torch CUDA wheel. Fix: venv\\Scripts\\python -m pip install torch --force-reinstall --index-url https://download.pytorch.org/whl/cu121")
+            # VRAM hint for 2050
+            vram = pvenv.get("vram_gb")
+            if vram and vram < 5:
+                print(f"[NOTE] VRAM {vram:.1f}GB detected (RTX 2050 4GB) — use beam=1 or turbo model for OOM safety.")
     else:
         # No venv or same exe
         print("\n--- verdict ---")
         if psys.get("cuda_available"):
-            print(f"[OK] CUDA ok: {psys.get('device_name')} {psys.get('vram_gb',0):.1f}GB")
+            vram = psys.get("vram_gb") or 0
+            hint = " (RTX 2050 4GB — use beam=1)" if vram and vram < 5 else ""
+            print(f"[OK] CUDA ok: {psys.get('device_name')} {vram:.1f}GB{hint}")
         elif psys.get("import_error"):
-            print("[FAIL] torch not installed — run install.ps1")
+            pyv = psys.get("py_version","?")
+            if pyv.startswith("3.13"):
+                print(f"[FAIL] Python {pyv} has no torch cu121 wheel. Fix: use Python 3.11 or:  pip install torch --index-url https://download.pytorch.org/whl/cu124")
+            else:
+                print("[FAIL] torch not installed — run install.bat")
         elif psys.get("cuda_built") is None:
-            print(f"[FAIL] CPU-only torch {psys.get('torch_version')} — reinstall CUDA:  pip install torch --force-reinstall --index-url https://download.pytorch.org/whl/cu121")
+            if str(psys.get("py_version","")).startswith("3.13"):
+                print(f"[FAIL] CPU-only torch {psys.get('torch_version')} on Python {psys.get('py_version')} — cu121 has no 3.13 wheel. Fix:  pip install torch --force-reinstall --index-url https://download.pytorch.org/whl/cu124  OR use Python 3.11")
+            else:
+                print(f"[FAIL] CPU-only torch {psys.get('torch_version')} — reinstall CUDA:  pip install torch --force-reinstall --index-url https://download.pytorch.org/whl/cu121")
         else:
             print(f"[FAIL] torch CUDA {psys.get('cuda_built')} but cuda_available=False — update NVIDIA driver from nvidia.com/drivers")
 

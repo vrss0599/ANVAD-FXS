@@ -220,13 +220,17 @@ def check_single(name: str) -> dict:
                         "fix_cmd": f"{venv_py} app\\main.py",
                     }
                 if has_driver:
-                    venv_cmd = f"{venv_py} -m pip install torch --index-url https://download.pytorch.org/whl/cu121"
+                    pyv2 = primary.get("py_version","")
+                    is313_2 = pyv2.startswith("3.13") or pyv2.startswith("3.14")
+                    idx = "https://download.pytorch.org/whl/cu124" if is313_2 else "https://download.pytorch.org/whl/cu121"
+                    hint2 = "Python 3.13 needs cu124 or Python 3.11" if is313_2 else "Install PyTorch with CUDA into venv"
+                    venv_cmd = f"{venv_py} -m pip install torch --index-url {idx}"
                     return {
                         "ok": False,
                         "warning": True,
                         "label": "GPU Acceleration",
-                        "detail": f"NVIDIA driver found but PyTorch not installed in {primary_key} ({primary.get('import_error','no torch')})",
-                        "fix_hint": "Install PyTorch with CUDA into venv",
+                        "detail": f"NVIDIA driver found but PyTorch not installed in {primary_key} ({primary.get('import_error','no torch')}) — Python {pyv2}",
+                        "fix_hint": hint2,
                         "fix_cmd": venv_cmd,
                     }
                 return {
@@ -242,6 +246,10 @@ def check_single(name: str) -> dict:
                 name_ = primary.get("device_name") or "GPU"
                 vram = primary.get("vram_gb")
                 vram_s = f"{vram:.1f}GB" if vram else ""
+                # VRAM-aware hint for RTX 2050 4GB
+                vram_hint = ""
+                if vram and vram < 5:
+                    vram_hint = " — 4GB VRAM: use beam=1 or turbo to avoid OOM"
                 # If launched outside venv but venv also has CUDA, note it
                 extra = ""
                 if not launched_in_venv and "venv" in results and results["venv"].get("cuda_available"):
@@ -251,8 +259,8 @@ def check_single(name: str) -> dict:
                 return {
                     "ok": True,
                     "label": f"GPU: {name_}",
-                    "detail": f"{name_} ({vram_s}){extra}",
-                    "fix_hint": None,
+                    "detail": f"{name_} ({vram_s}){extra}{vram_hint}",
+                    "fix_hint": "RTX 2050 4GB: preset Balanced or Fast recommended" if vram and vram < 5 else None,
                     "fix_cmd": None,
                 }
             else:
@@ -270,15 +278,24 @@ def check_single(name: str) -> dict:
                         "fix_hint": "Relaunch GUI via venv python for CUDA",
                         "fix_cmd": f"{venv_py} app\\main.py",
                     }
-                # CPU-only torch but driver exists
+                # CPU-only torch but driver exists — handle Python 3.13 cu121 missing wheel
                 if has_driver and not cuda_built:
-                    venv_cmd = f"{venv_py} -m pip install torch --force-reinstall --index-url https://download.pytorch.org/whl/cu121"
+                    pyv = primary.get("py_version") or ""
+                    is_313 = pyv.startswith("3.13") or pyv.startswith("3.14")
+                    if is_313:
+                        venv_cmd = f"{venv_py} -m pip install torch --force-reinstall --index-url https://download.pytorch.org/whl/cu124"
+                        detail = f"NVIDIA GPU detected but Python {pyv} torch {ver} is CPU-only — cu121 has no cp313 wheel"
+                        hint = "Python 3.13 needs cu124 (or use Python 3.11). Run cu124 install or use install.bat"
+                    else:
+                        venv_cmd = f"{venv_py} -m pip install torch --force-reinstall --index-url https://download.pytorch.org/whl/cu121"
+                        detail = f"NVIDIA GPU detected but {primary_key} PyTorch {ver} is CPU-only (cuda_built={cuda_built})"
+                        hint = "Reinstall PyTorch with CUDA into venv (yellow → green after reinstall)"
                     return {
                         "ok": False,
                         "warning": True,
                         "label": "GPU (wrong PyTorch)",
-                        "detail": f"NVIDIA GPU detected but {primary_key} PyTorch {ver} is CPU-only (cuda_built={cuda_built})",
-                        "fix_hint": "Reinstall PyTorch with CUDA into venv (yellow → green after reinstall)",
+                        "detail": detail,
+                        "fix_hint": hint,
                         "fix_cmd": venv_cmd,
                     }
                 elif has_driver and cuda_built:
@@ -305,18 +322,31 @@ def check_single(name: str) -> dict:
             if torch.cuda.is_available():
                 device_name = torch.cuda.get_device_name(0)
                 props = torch.cuda.get_device_properties(0)
-                vram = f"{props.total_memory / 1024**3:.1f}GB"
+                vram_gb = props.total_memory / 1024**3
+                vram = f"{vram_gb:.1f}GB"
+                vram_hint = " — 4GB VRAM: use beam=1" if vram_gb < 5 else ""
                 return {
                     "ok": True,
                     "label": f"GPU: {device_name}",
-                    "detail": f"{device_name} ({vram}) [fallback probe]",
-                    "fix_hint": None,
+                    "detail": f"{device_name} ({vram}) [fallback probe]{vram_hint}",
+                    "fix_hint": "RTX 2050 4GB: use preset Fast/Balanced" if vram_gb < 5 else None,
                     "fix_cmd": None,
                 }
             else:
                 torch_cuda_built = hasattr(torch.version, "cuda") and torch.version.cuda is not None
                 has_nvidia_driver = _has_nvidia_driver()
                 if has_nvidia_driver and not torch_cuda_built:
+                    pyv = f"{sys.version_info.major}.{sys.version_info.minor}"
+                    is_313 = pyv.startswith("3.13") or pyv.startswith("3.14")
+                    if is_313:
+                        return {
+                            "ok": False,
+                            "warning": True,
+                            "label": "GPU (wrong PyTorch)",
+                            "detail": f"Python {pyv} CPU-only torch {torch.__version__} — cu121 has no cp313 wheel",
+                            "fix_hint": "Use Python 3.11 or install cu124: pip install torch --index-url https://download.pytorch.org/whl/cu124",
+                            "fix_cmd": f"{venv_py} -m pip install torch --force-reinstall --index-url https://download.pytorch.org/whl/cu124",
+                        }
                     return {
                         "ok": False,
                         "warning": True,
