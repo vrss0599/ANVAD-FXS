@@ -33,7 +33,7 @@ Copy `config.example.json` → `config.json` next to `srt_to_textplus.py` (same 
 
 ```json
 {
-  "srt_path": "C:/Users/Shreyas Shetty/UGA-SUB-DR/exports/generated-ENGLISH.srt",
+  "srt_path": "C:/Users/YourUsername/UGA-SUB-DR/exports/generated-ENGLISH.srt",
   "targetTrack": 2,
   "templatePattern": "TEMPLATE",
   "fps": null,
@@ -52,7 +52,7 @@ Copy `config.example.json` → `config.json` next to `srt_to_textplus.py` (same 
 1. In Resolve: open timeline, select `Edit` or `Fusion` page (either works, Fusion required for Text+ Fusion comps).
 2. `Workspace -> Console -> Py3` then:
    ```python
-   exec(open(r"C:\Users\Shreyas Shetty\AppData\Roaming\Blackmagic Design\DaVinci Resolve\Support\Fusion\Scripts\Utility\srt_to_textplus.py", encoding="utf-8").read())
+    exec(open(r"%APPDATA%\Blackmagic Design\DaVinci Resolve\Support\Fusion\Scripts\Utility\srt_to_textplus.py", encoding="utf-8").read())
    ```
    Or `Workspace -> Scripts -> Utility -> srt_to_textplus`.
 3. Console output:

@@ -111,7 +111,7 @@ class AppWindow(ctk.CTk):
 
         ctk.CTkLabel(
             footer,
-            text="UGA-SUB · Free DaVinci Auto-Subtitles · RTX 3050 6GB Optimized · $0 · Offline",
+            text="UGA-SUB · Free DaVinci Auto-Subtitles · RTX 3050 6GB Optimized · ₹0 · Offline",
             font=ctk.CTkFont(family=FONTS["small"][0], size=9),
             text_color=COLORS["muted"],
         ).pack(side="left")

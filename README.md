@@ -1,6 +1,6 @@
 # UGA-SUB — Free DaVinci Auto-Subtitles
 
-> **$0, 100% Offline Local AI Subtitling & Translation for DaVinci Resolve FREE**  
+> **₹0, 100% Offline Local AI Subtitling & Translation for DaVinci Resolve FREE**  
 > Tuned for **NVIDIA RTX 2050 4GB / 3050 6GB (120W) + 24GB RAM** with automatic CPU fallback. Simple: `python install.py` — works on Python 3.10/3.11 (recommended) and 3.13 (auto cu124 fallback).
 
 ---
@@ -51,7 +51,7 @@ cd UGA-SUB-DR
 ```powershell
 python install.py
 # does: venv create -> pip upgrade -> torch CUDA (cu121, or cu124 on 3.13) -> app + transcribe deps -> check_cuda
-# Handles spaces in path ("Sanika manjunath"), Python 3.13 fallback, and RTX 2050 4GB vs 3050 6GB automatically.
+# Handles spaces in path (e.g. "Your Username"), Python 3.13 fallback, and RTX 2050 4GB vs 3050 6GB automatically.
 ```
 
 Then:
@@ -80,13 +80,21 @@ python -m venv venv
 
 > **Note on CUDA:** `nvidia-cudnn-cu12`/`nvidia-cublas-cu12` wheels are bundled — no manual CUDA Toolkit needed if driver ≥537.
 
-### 3. FFmpeg Setup (Audio Extraction)
-If you already installed `app/requirements.txt` above, `imageio-ffmpeg` is installed inside your venv automatically!
+### 3. FFmpeg Setup (Audio Extraction — Required, NOT installed by `install.py`)
 
-Alternatively, you can choose any of these methods:
-* **Option A (In Venv via pip - Easiest):** `pip install imageio-ffmpeg` (automatically bundles standalone `ffmpeg.exe` inside your venv).
-* **Option B (Copy binary):** Copy your existing `ffmpeg.exe` into `.\venv\Scripts\` or the project root `UGA-SUB-DR\`.
-* **Option C (System-wide):** `winget install Gyan.FFmpeg`
+`python install.py` does **not** install FFmpeg — pick **one** method below, verify with `ffmpeg -version`, then proceed to Step 2:
+
+* **Option A (System-wide via winget — Recommended):** `winget install Gyan.FFmpeg` (adds `ffmpeg` to system PATH, works everywhere; close/reopen terminal after install)
+* **Option B (In Venv via pip — Portable/Non-admin):** `.\venv\Scripts\python -m pip install imageio-ffmpeg` (bundles standalone `ffmpeg.exe` inside your venv at `venv\Lib\site-packages\imageio_ffmpeg\`; resolved automatically via `imageio_ffmpeg.get_ffmpeg_exe()` without needing PATH — portable per-venv)
+* **Option C (Manual copy — Bring into project dir):** Copy your existing `ffmpeg.exe` into `.\venv\Scripts\` or the project root `UGA-SUB-DR\` (checked by `transcribe/extract_audio.py` before falling back to PATH/imageio)
+
+**Verify (then go to next step):**
+```powershell
+ffmpeg -version
+# Should print version + configuration. If Option B only: verify with:
+.\venv\Scripts\python -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())"
+# UI check: Section 1 System Status → FFmpeg badge turns green "Found: ..." or red with ↻ Retry
+```
 
 ---
 
@@ -172,7 +180,7 @@ Copy-Item "resolve_free\config.json" "$resolveDir\"
 Edit `$resolveDir\config.json` (or `resolve_free/config.json`) with forward slashes:
 ```json
 {
-  "srt_path": "C:/Users/Shreyas Shetty/UGA-SUB-DR/exports/audio-ENGLISH.srt",
+  "srt_path": "C:/Users/YourUsername/UGA-SUB-DR/exports/audio-ENGLISH.srt",
   "targetTrack": 2,
   "templatePattern": "TEMPLATE",
   "fps": null,
@@ -186,7 +194,7 @@ Edit `$resolveDir\config.json` (or `resolve_free/config.json`) with forward slas
 2. Open **Workspace $\to$ Console $\to$ Py3 tab**.
 3. Run the following command:
 ```python
-exec(open(r"C:\Users\Shreyas Shetty\AppData\Roaming\Blackmagic Design\DaVinci Resolve\Support\Fusion\Scripts\Utility\srt_to_textplus.py", encoding="utf-8").read())
+exec(open(r"%APPDATA%\Blackmagic Design\DaVinci Resolve\Support\Fusion\Scripts\Utility\srt_to_textplus.py", encoding="utf-8").read())
 ```
 *Or navigate to **Workspace $\to$ Scripts $\to$ Utility $\to$ srt_to_textplus**.*
 
@@ -230,8 +238,8 @@ The script will:
   4. In desktop UI Advanced Settings, select **Device: CPU**.
 
 ### 3. FFmpeg Missing Error
-- **Symptom:** `[error] ffmpeg not found: 'ffmpeg' not on PATH`.
-- **Fix:** Install via `winget install Gyan.FFmpeg`, then close and reopen your terminal / desktop app.
+- **Symptom:** `[error] ffmpeg not found: 'ffmpeg' not on PATH` or UI badge red `FFmpeg Not found on PATH`.
+- **Fix:** Pick one (see Step 1.3): `winget install Gyan.FFmpeg` (recommended, system-wide) **or** `.\venv\Scripts\python -m pip install imageio-ffmpeg` (venv-bundled, no PATH) **or** copy `ffmpeg.exe` into `.\venv\Scripts\` / project root. Then verify `ffmpeg -version` (or `.\venv\Scripts\python -c "import imageio_ffmpeg; print(imageio_ffmpeg.get_ffmpeg_exe())"` for Option B), close/reopen terminal/app.
 
 ### 4. Timestamp Drift / Frame Rate Rounding (e.g., 29.97 fps)
 - **Symptom:** Subtitle sync gradually drifts away from audio across a 30+ minute video.
@@ -249,7 +257,7 @@ The script will:
 ### 7. Run Pre-flight Timeline Diagnostics
 To inspect your timeline frame rate, start frame, and track configuration before injection, run inside Resolve Py3 Console:
 ```python
-exec(open(r"C:\Users\Shreyas Shetty\AppData\Roaming\Blackmagic Design\DaVinci Resolve\Support\Fusion\Scripts\Utility\check_timeline.py", encoding="utf-8").read())
+exec(open(r"%APPDATA%\Blackmagic Design\DaVinci Resolve\Support\Fusion\Scripts\Utility\check_timeline.py", encoding="utf-8").read())
 ```
 
 ---

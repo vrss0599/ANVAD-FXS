@@ -1,6 +1,6 @@
 {
   "_comment": "resolve_free Text+ injection config — copy to config.json next to srt_to_textplus.py. FREE has no UIManager dialog, so config file is required.",
-  "srt_path": "C:/Users/Shreyas Shetty/UGA-SUB-DR/exports/generated-ENGLISH.srt",
+  "srt_path": "C:/Users/YourUsername/UGA-SUB-DR/exports/generated-ENGLISH.srt",
   "targetTrack": 2,
   "templatePattern": "TEMPLATE",
   "fps": null,

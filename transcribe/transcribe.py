@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ENV-A: Local transcription with faster-whisper (CTranslate2) — tuned for RTX 2050 4GB / 3050 6GB
-Replaces prev-plan.md Colab openai-whisper large-v3 + Tesla T4 paywall with fully local, $0 inference.
+Replaces prev-plan.md Colab openai-whisper large-v3 + Tesla T4 paywall with fully local, ₹0 inference.
 
 Default: large-v3 int8_float16 cuda beam=5 vad_filter=False word_timestamps=True task=translate -> SRT
 Perf on 3050 6GB: 1hr ~2m00s-2m45s (large-v3 beam=5, VAD off) / 30-45s (turbo) ; 10-min ~20-27s

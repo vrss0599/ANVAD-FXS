@@ -8,7 +8,7 @@ Why this file exists: no .ps1 / .bat / ExecutionPolicy issues. Just:
 
 Handles:
   - Python 3.10/3.11/3.13 (3.11 recommended; 3.13 has no cu121 wheel, auto-falls back to cu124)
-  - Spaces in path (e.g. "Sanika manjunath") via pathlib — no quoting needed
+   - Spaces in path (e.g. "Your Username") via pathlib — no quoting needed
   - GPU VRAM hint (nvidia-smi if present)
   - Robust torch CUDA install: cu121 --index-url -> cu121 --extra-index -> cu124 --index -> cpu
   - Never aborts on torch failure — always installs app/transcribe deps so GUI works on CPU

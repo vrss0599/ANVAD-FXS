@@ -6,7 +6,7 @@ Prints timeline FPS, start timecode, track counts, and template detection.
 Use to verify before running srt_to_textplus.py.
 
 Inside Console, run:
-  exec(open(r"C:/Users/Shreyas Shetty/UGA-SUB-DR/resolve_free/check_timeline.py", encoding="utf-8").read())
+  exec(open(r"C:/Users/YourUsername/UGA-SUB-DR/resolve_free/check_timeline.py", encoding="utf-8").read())
 
 Or place in Utility and run via Workspace -> Scripts -> Utility -> check_timeline
 """
