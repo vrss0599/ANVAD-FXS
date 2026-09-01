@@ -1,7 +1,7 @@
 # UGA-SUB — Free DaVinci Auto-Subtitles
 
 > **$0, 100% Offline Local AI Subtitling & Translation for DaVinci Resolve FREE**  
-> Tuned for **NVIDIA RTX 2050 4GB / 3050 6GB (120W) + 24GB RAM** with automatic CPU fallback. Foolproof for Python 3.10/3.11 (recommended) and 3.13 (auto cu124 fallback).
+> Tuned for **NVIDIA RTX 2050 4GB / 3050 6GB (120W) + 24GB RAM** with automatic CPU fallback. Simple: `python install.py` — works on Python 3.10/3.11 (recommended) and 3.13 (auto cu124 fallback).
 
 ---
 
@@ -29,7 +29,7 @@
 ## Requirements & Prerequisites
 
 1. **Operating System:** Windows 10 / 11 (64-bit)
-2. **Python:** Python `3.11.x` 64-bit recommended (3.10 also ok). **Python 3.13 works** via `cu124` fallback but `3.11` has best `cu121` wheel support — installer auto-handles it. Install with **Add Python to PATH** checked.
+2. **Python:** Python `3.11.x` 64-bit recommended (3.10 also ok). **Python 3.13 works** via `cu124` fallback but `3.11` has best `cu121` wheel support — just run `python install.py`, it auto-picks. Install with **Add Python to PATH** checked.
 3. **GPU & Drivers:** NVIDIA GPU (RTX 2050 4GB or 3050 6GB recommended, detects VRAM auto) with Driver version $\ge$ 537. *(Runs in CPU mode if no NVIDIA GPU is present)*.
 4. **FFmpeg:** Required for audio extraction from video containers.
 5. **DaVinci Resolve:** DaVinci Resolve FREE 18.x / 19.x (installed from [blackmagicdesign.com](https://www.blackmagicdesign.com/products/davinciresolve), not the Microsoft Store).
@@ -45,46 +45,40 @@ git clone https://github.com/vrss0599/ANVAD-FXS.git UGA-SUB-DR
 cd UGA-SUB-DR
 ```
 
-### 2. Create Virtual Environment & Install Dependencies (Robust)
+### 2. Create Virtual Environment & Install Dependencies (Simple — no .ps1/.bat)
 
-**Option A — One-click (Recommended, fixes yellow CUDA badge):**
+**One command (recommended):**
 ```powershell
-# Double-click install.bat or run:
-powershell -ExecutionPolicy Bypass -File .\install.ps1
-# Then launch:
-.\launch.ps1   # or double-click launch.bat — always uses venv python
-# Verify CUDA:
-.\venv\Scripts\python tools/check_cuda.py
+python install.py
+# does: venv create -> pip upgrade -> torch CUDA (cu121, or cu124 on 3.13) -> app + transcribe deps -> check_cuda
+# Handles spaces in path ("Sanika manjunath"), Python 3.13 fallback, and RTX 2050 4GB vs 3050 6GB automatically.
 ```
 
-**Option B — Manual (if you prefer step-by-step):**
+Then:
 ```powershell
-# (One-time) Fix PowerShell script execution policy if you get "UnauthorizedAccess" error
-Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
+# Verify CUDA (probes both system and venv):
+.\venv\Scripts\python tools/check_cuda.py
+# or: python tools/check_cuda.py  (install.py runs this for you)
+```
 
-# Create venv in project root
+**Manual (if you prefer step-by-step):**
+```powershell
 python -m venv venv
-
-# IMPORTANT: Always use venv python explicitly (avoids yellow badge when GUI launched outside venv)
 .\venv\Scripts\python -m pip install --upgrade pip
-
-# Install PyTorch CUDA FIRST (deterministic — bare `pip install torch>=2.2.0` may pick CPU wheel via --extra-index-url fallback)
+# PyTorch CUDA FIRST (deterministic — bare `pip install torch` may pick CPU wheel)
 .\venv\Scripts\python -m pip install torch --index-url https://download.pytorch.org/whl/cu121
-
-# Install desktop UI + transcription deps (torch already CUDA, resolver won't downgrade to CPU)
+# If Python 3.13 (cu121 has no 3.13 wheel): use cu124 instead:
+# .\venv\Scripts\python -m pip install torch --index-url https://download.pytorch.org/whl/cu124
 .\venv\Scripts\python -m pip install -r app/requirements.txt
 .\venv\Scripts\python -m pip install -r transcribe/requirements.txt
-
-# Verify:
-.\venv\Scripts\python -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
 .\venv\Scripts\python tools/check_cuda.py
 ```
 
-> **Why yellow badge after first install?** Two causes: (1) `pip`'s `--extra-index-url` is fallback, not override — first `pip install -r transcribe/requirements.txt` can pick `torch+cpu` from PyPI even though `cu121` exists; (2) launching GUI via system `python` (not venv) imports system torch (CPU/missing). `install.ps1` fixes both by force-installing `torch+cu121` via `--index-url` into venv. `tools/check_cuda.py` probes both interpreters. GUI now probes venv via subprocess (slightly slower, ~1s, but accurate) and shows `GPU (venv mismatch)` with copyable fix `.\venv\Scripts\python app\main.py`.
+> **Why yellow badge after first install?** (1) `pip`'s `--extra-index-url` is fallback — plain `pip install -r transcribe/requirements.txt` can pick `torch+cpu` from PyPI; (2) launching GUI via system `python` checks system torch, not venv. `python install.py` fixes both by force-installing `torch+cu121/cu124` via `--index-url` into venv. `tools/check_cuda.py` probes both interpreters; GUI probes venv via subprocess and shows `GPU (venv mismatch)` with copyable fix `.\venv\Scripts\python app\main.py`. Always launch via `.\venv\Scripts\python app\main.py`.
 
-> **PowerShell Execution Policy:** If `.\venv\Scripts\activate` gives `UnauthorizedAccess`, run `Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned` once. Prefer `.\venv\Scripts\python ...` over `activate` + bare `python`/`pip`.
+> **No ExecutionPolicy needed:** `python install.py` and `.\venv\Scripts\python ...` never trigger PowerShell script blocking. If you previously saw `UnauthorizedAccess` for `.ps1`, it's gone — there are no `.ps1`/`.bat` launchers anymore.
 
-> **Note on CUDA:** Standalone `nvidia-cudnn-cu12`/`nvidia-cublas-cu12` wheels are bundled — no manual CUDA Toolkit needed if driver ≥537.
+> **Note on CUDA:** `nvidia-cudnn-cu12`/`nvidia-cublas-cu12` wheels are bundled — no manual CUDA Toolkit needed if driver ≥537.
 
 ### 3. FFmpeg Setup (Audio Extraction)
 If you already installed `app/requirements.txt` above, `imageio-ffmpeg` is installed inside your venv automatically!
@@ -98,16 +92,11 @@ Alternatively, you can choose any of these methods:
 
 ## Step 2: Launch the Desktop UI
 
-Launch via venv (robust — avoids yellow CUDA badge):
-
 ```powershell
-# Recommended:
-.\launch.ps1          # or double-click launch.bat
-# Alternative:
+# Always use venv python (avoids yellow badge — no .ps1/.bat needed):
+.\venv\Scripts\python app/main.py
+# Or after `python install.py`, just:
 .\venv\Scripts\python app\main.py
-# Legacy (also works if activated):
-.\venv\Scripts\Activate.ps1
-python app/main.py
 ```
 
 ### Desktop UI Features (UX-First Design)
@@ -171,7 +160,7 @@ For styled Fusion Text+ titles with individual motion graphic/font styling:
 #### 2. Install Scripts to Resolve Utility Folder
 Copy the scripts from `resolve_free/` into DaVinci Resolve's application scripts directory:
 ```powershell
-# Copy scripts to Resolve AppData
+# Copy scripts to Resolve AppData (PowerShell — not related to install.py)
 $resolveDir = "$env:APPDATA\Blackmagic Design\DaVinci Resolve\Support\Fusion\Scripts\Utility"
 New-Item -ItemType Directory -Force -Path $resolveDir
 Copy-Item "resolve_free\srt_to_textplus.py" "$resolveDir\"
@@ -213,17 +202,19 @@ The script will:
 
 ### 0. CUDA Shows Yellow After Fresh Install (Most Common)
 - **Symptom:** After `pip install -r transcribe/requirements.txt`, GPU badge is yellow `⚠ GPU (wrong PyTorch) CPU-only` or `GPU (venv mismatch)`. Transcription still works on CPU, but you expect CUDA.
-- **Cause 1:** `pip`'s `--extra-index-url` is fallback — first install can pick `torch+cpu` from PyPI even though `cu121` exists. **Cause 2:** GUI launched via system `python` (no venv) so status checks system torch, not venv torch where CUDA was installed.
+- **Cause 1:** `pip`'s `--extra-index-url` is fallback — first install can pick `torch+cpu` from PyPI even though `cu121` exists. **Cause 2:** GUI launched via system `python` (no venv) so status checks system torch, not venv torch where CUDA was installed. **Cause 3 (Python 3.13):** `cu121` has no `cp313` wheel — shows CPU-only even after install.
 - **Fix:** 
   ```powershell
-  # Force CUDA torch into venv (deterministic):
+  # One-shot fix (handles 3.13 cu124 fallback automatically):
+  python install.py
+  # Or manual deterministic:
   .\venv\Scripts\python -m pip install torch --force-reinstall --index-url https://download.pytorch.org/whl/cu121
-  # Or just re-run the robust installer:
-  .\install.ps1
+  # If Python 3.13: use cu124 instead:
+  # .\venv\Scripts\python -m pip install torch --force-reinstall --index-url https://download.pytorch.org/whl/cu124
   # Relaunch via venv (always):
-  .\venv\Scripts\python app\main.py   # or .\launch.ps1
+  .\venv\Scripts\python app\main.py
   ```
-- **Verify:** `.\venv\Scripts\python tools/check_cuda.py` probes both interpreters and tells you exactly which to fix. GUI now probes venv via subprocess (slightly slower ~1s, but robust) — click `↻ Recheck` or `Copy` fix command. Yellow is warning, not error; transcription falls back to CPU `int8` if GPU truly missing.
+- **Verify:** `.\venv\Scripts\python tools/check_cuda.py` probes both interpreters and tells you exactly which to fix (now mentions `3.13 → cu124`). GUI now probes venv via subprocess (slightly slower ~1s, but robust) — click `↻ Recheck` or `Copy` fix command. Yellow is warning, not error; transcription falls back to CPU `int8` if GPU truly missing.
 
 ### 1. `nvidia-smi` Not Found / GPU Shows "None"
 - **Cause:** NVIDIA graphic drivers are not installed, or your laptop is running on integrated graphics (Intel Iris Xe / AMD Radeon).

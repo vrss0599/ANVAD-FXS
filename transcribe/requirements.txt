@@ -1,15 +1,16 @@
 # ENV-A: Local STT for RTX 2050 4GB / 3050 6GB — faster-whisper CTranslate2
 # Tested: Python 3.11 x64 (3.10 ok, 3.13 via cu124 fallback), Windows 10/11
-# Robust install (fixes torch CPU / yellow badge + 3.13 cu121 missing wheel):
-#   Use:  install.bat (double-click, foolproof)  or  powershell -ExecutionPolicy Bypass -File .\install.ps1
-#   Or manually (always use venv python explicitly, handles spaces in path):
-#     python -m venv venv
-#     venv\Scripts\python -m pip install --upgrade pip
-#     venv\Scripts\python -m pip install torch --index-url https://download.pytorch.org/whl/cu121  # 3.11/3.10
-#     # If Python 3.13 (cu121 has no cp313 wheel):  venv\Scripts\python -m pip install torch --index-url https://download.pytorch.org/whl/cu124
-#     venv\Scripts\python -m pip install -r app/requirements.txt
-#     venv\Scripts\python -m pip install -r transcribe/requirements.txt
-#   Verify:  venv\Scripts\python tools/check_cuda.py
+# Simple install (no .ps1/.bat needed — fixes ExecutionPolicy + spaces in path):
+#   python install.py            # one-shot: creates venv, installs torch+deps, runs check_cuda
+#   venv\Scripts\python tools/check_cuda.py
+#   venv\Scripts\python app/main.py
+# Or manually (always use venv python explicitly):
+#   python -m venv venv
+#   venv\Scripts\python -m pip install --upgrade pip
+#   venv\Scripts\python -m pip install torch --index-url https://download.pytorch.org/whl/cu121  # 3.11/3.10
+#   # If Python 3.13 (cu121 has no cp313 wheel):  venv\Scripts\python -m pip install torch --index-url https://download.pytorch.org/whl/cu124
+#   venv\Scripts\python -m pip install -r app/requirements.txt
+#   venv\Scripts\python -m pip install -r transcribe/requirements.txt
 # First transcription run will download model (~1.5-2.9GB) to %USERPROFILE%\.cache\huggingface
 
 --extra-index-url https://download.pytorch.org/whl/cu121
@@ -28,7 +29,7 @@ nvidia-cublas-cu12 ; sys_platform == "win32"
 
 # Torch — device detection + empty_cache(); faster-whisper itself does NOT need torch.
 # IMPORTANT: Bare `torch>=2.2.0` with --extra-index-url can pick CPU wheel from PyPI (yellow badge).
-# install.ps1 force-installs CUDA torch BEFORE this file: cu121 for 3.10/3.11, cu124 fallback for 3.13 (cu121 has no cp313 wheel).
+# install.py force-installs CUDA torch BEFORE this file: cu121 for 3.10/3.11, cu124 fallback for 3.13 (cu121 has no cp313 wheel).
 # This line is fallback only — will not downgrade an existing CUDA torch.
 # If you must use CPU-only:  pip install torch --index-url https://download.pytorch.org/whl/cpu
 # RTX 2050/3050: both use same torch build; 2050 4GB VRAM is handled via auto-tune (beam downgrade) not torch variant.

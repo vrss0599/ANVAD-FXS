@@ -96,17 +96,17 @@ def main():
         print("\n--- verdict ---")
         def has_cuda(d): return d.get("cuda_available") is True
         if has_cuda(pvenv) and not has_cuda(psys):
-            print("[OK] venv has CUDA but system does not — launch GUI via venv:  venv\\Scripts\\python app\\main.py (or launch.bat)")
+            print("[OK] venv has CUDA but system does not — launch GUI via venv:  venv\\Scripts\\python app/main.py")
         elif has_cuda(pvenv) and has_cuda(psys):
             print("[OK] Both have CUDA — any launch method works, but venv is recommended.")
         elif not has_cuda(pvenv) and has_cuda(psys):
-            print("[WARN] system has CUDA but venv does not — reinstall into venv:  venv\\Scripts\\python -m pip install torch --force-reinstall --index-url https://download.pytorch.org/whl/cu124")
+            print("[WARN] system has CUDA but venv does not — reinstall into venv:  venv\\Scripts\\python -m pip install torch --force-reinstall --index-url https://download.pytorch.org/whl/cu121")
         elif pvenv.get("import_error"):
             pyv = pvenv.get("py_version","?")
             if pyv.startswith("3.13") or pyv.startswith("3.14"):
-                print(f"[FAIL] venv Python {pyv} missing torch — PyTorch cu121 has no cp313 wheel. Fix: install Python 3.11, or run:  venv\\Scripts\\python -m pip install torch --index-url https://download.pytorch.org/whl/cu124")
+                print(f"[FAIL] venv Python {pyv} missing torch — PyTorch cu121 has no cp313 wheel. Fix: python install.py  (auto cu124) or: venv\\Scripts\\python -m pip install torch --index-url https://download.pytorch.org/whl/cu124")
             else:
-                print("[FAIL] venv missing torch — run:  install.bat  or  venv\\Scripts\\python -m pip install torch --index-url https://download.pytorch.org/whl/cu121")
+                print("[FAIL] venv missing torch — run:  python install.py  or  venv\\Scripts\\python -m pip install torch --index-url https://download.pytorch.org/whl/cu121")
         else:
             # Check if 3.13 cpu torch case
             if pvenv.get("cuda_built") is None and str(pvenv.get("py_version","")).startswith("3.13"):
@@ -127,9 +127,9 @@ def main():
         elif psys.get("import_error"):
             pyv = psys.get("py_version","?")
             if pyv.startswith("3.13"):
-                print(f"[FAIL] Python {pyv} has no torch cu121 wheel. Fix: use Python 3.11 or:  pip install torch --index-url https://download.pytorch.org/whl/cu124")
+                print(f"[FAIL] Python {pyv} has no torch cu121 wheel. Fix: python install.py  (auto cu124) or use Python 3.11")
             else:
-                print("[FAIL] torch not installed — run install.bat")
+                print("[FAIL] torch not installed — run: python install.py")
         elif psys.get("cuda_built") is None:
             if str(psys.get("py_version","")).startswith("3.13"):
                 print(f"[FAIL] CPU-only torch {psys.get('torch_version')} on Python {psys.get('py_version')} — cu121 has no 3.13 wheel. Fix:  pip install torch --force-reinstall --index-url https://download.pytorch.org/whl/cu124  OR use Python 3.11")
